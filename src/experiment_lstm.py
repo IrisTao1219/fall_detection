@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fall detection experiment with RNN / LSTM on BlazePose keypoint sequences.
+Fall detection experiment with LSTM on BlazePose keypoint sequences.
 
 Compatible with the user's existing NPZ structure:
     keypoints:   [T, 33, 4] -> x, y, z, visibility
@@ -11,10 +11,10 @@ Compatible with the user's existing NPZ structure:
 
 Default experiment:
 - feature: all BlazePose x/y coordinates -> 33 * 2 = 66 dims per frame
-- window length: 24 frames (paper setting)
+- window length: 30 frames
 - stride: 1 frame
 - missing joint handling: [0, 0] (paper setting)
-- RNN/LSTM: 10 recurrent layers, 80 hidden units
+- LSTM: 10 recurrent layers, 80 hidden units
 - BatchNorm after input and recurrent outputs
 - video-grouped 5-fold CV to prevent windows from the same video leaking
   across train/test folds
@@ -22,25 +22,20 @@ Default experiment:
   classification report, confusion matrix, per-fold results
 
 Examples:
-    uv run python src/rnn/experiment.py --model lstm
-    uv run python src/rnn/experiment.py --model rnn
-    uv run python src/rnn/experiment.py --model both
+    uv run python src/lstm/experiment.py
 
 Raw keypoints:
-    uv run python src/rnn/experiment.py \
+    uv run python src/lstm/experiment.py \
         --data-root data/keypoints \
-        --model both
 
 Normalized keypoints:
-    uv run python src/rnn/experiment.py \
+    uv run python src/lstm/experiment.py \
         --data-root data/keypoints_normalized \
-        --model both
 
 If you later confirm the paper's exact 16-D posture vector as 8 x/y joints:
-    uv run python src/rnn/experiment.py \
+    uv run python src/lstm/experiment.py \
         --feature-mode joints16 \
         --joint-indices 11,12,23,24,25,26,27,28 \
-        --model lstm
 
 NOTE:
 The 8-joint example above is only an explicit user-selected 16-D proxy.
@@ -488,36 +483,22 @@ class RecurrentClassifier(nn.Module):
         input_dim: int,
         hidden_size: int,
         num_layers: int,
-        model_type: str,
         dropout: float,
         num_classes: int = 2,
     ):
         super().__init__()
 
-        self.model_type = model_type
         self.input_bn = nn.BatchNorm1d(input_dim)
 
         recurrent_dropout = dropout if num_layers > 1 else 0.0
 
-        if model_type == "lstm":
-            self.recurrent = nn.LSTM(
-                input_size=input_dim,
-                hidden_size=hidden_size,
-                num_layers=num_layers,
-                batch_first=True,
-                dropout=recurrent_dropout,
-            )
-        elif model_type == "rnn":
-            self.recurrent = nn.RNN(
-                input_size=input_dim,
-                hidden_size=hidden_size,
-                num_layers=num_layers,
-                nonlinearity="tanh",
-                batch_first=True,
-                dropout=recurrent_dropout,
-            )
-        else:
-            raise ValueError(f"Unknown model_type: {model_type}")
+        self.recurrent = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=recurrent_dropout,
+        )
 
         self.recurrent_bn = nn.BatchNorm1d(hidden_size)
         self.fc = nn.Linear(hidden_size, num_classes)
@@ -667,7 +648,6 @@ def fmt_metric(v: float) -> str:
 # -----------------------------
 
 def run_model_cv(
-    model_type: str,
     X: np.ndarray,
     y: np.ndarray,
     groups: np.ndarray,
@@ -675,7 +655,7 @@ def run_model_cv(
     args,
     device: torch.device,
 ) -> None:
-    model_dir = args.output_root / model_type
+    model_dir = args.output_root
     model_dir.mkdir(parents=True, exist_ok=True)
 
     unique_groups = np.unique(groups)
@@ -714,7 +694,7 @@ def run_model_cv(
 
     metrics_lines: List[str] = []
     metrics_lines.append("=" * 80)
-    metrics_lines.append(f"MODEL: {model_type.upper()}")
+    metrics_lines.append("MODEL: LSTM")
     metrics_lines.append("=" * 80)
     metrics_lines.append(f"data_root: {args.data_root}")
     metrics_lines.append(f"feature_mode: {args.feature_mode}")
@@ -741,7 +721,7 @@ def run_model_cv(
     ):
         print("\n" + "=" * 72)
         print(
-            f"{model_type.upper()} | Fold {fold}/{n_splits} | "
+            f"LSTM | Fold {fold}/{n_splits} | "
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
@@ -780,7 +760,6 @@ def run_model_cv(
             input_dim=X.shape[-1],
             hidden_size=args.hidden_size,
             num_layers=args.num_layers,
-            model_type=model_type,
             dropout=args.dropout,
             num_classes=2,
         )
@@ -836,7 +815,7 @@ def run_model_cv(
 
         # Save fold checkpoint + training history.
         checkpoint = {
-            "model_type": model_type,
+            "model_type": "lstm",
             "input_dim": X.shape[-1],
             "hidden_size": args.hidden_size,
             "num_layers": args.num_layers,
@@ -930,7 +909,7 @@ def run_model_cv(
     pred_df.to_csv(model_dir / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
-    print(f"{model_type.upper()} OVERALL")
+    print("LSTM OVERALL")
     print(
         f"Accuracy={overall['accuracy']:.4f} | "
         f"Precision={overall['precision']:.4f} | "
@@ -955,7 +934,7 @@ def parse_joint_indices(text: Optional[str]) -> Optional[List[int]]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Fall detection with grouped-CV RNN/LSTM on BlazePose sequences."
+        description="Fall detection with grouped-CV LSTM on BlazePose sequences."
     )
 
     p.add_argument(
@@ -967,14 +946,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-root",
         type=Path,
-        default=Path("results/rnn_lstm"),
+        default=Path("results/lstm"),
     )
-    p.add_argument(
-        "--model",
-        choices=["rnn", "lstm", "both"],
-        default="both",
-    )
-
     p.add_argument(
         "--feature-mode",
         choices=["xy66", "joints16"],
@@ -988,7 +961,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated 8 BlazePose indices for joints16 mode.",
     )
 
-    p.add_argument("--window-size", type=int, default=24)
+    p.add_argument("--window-size", type=int, default=30)
     p.add_argument("--stride", type=int, default=1)
 
     p.add_argument(
@@ -1058,18 +1031,14 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    models = ["rnn", "lstm"] if args.model == "both" else [args.model]
-
-    for model_type in models:
-        run_model_cv(
-            model_type=model_type,
-            X=X,
-            y=y,
-            groups=groups,
-            records_df=records_df,
-            args=args,
-            device=device,
-        )
+    run_model_cv(
+        X=X,
+        y=y,
+        groups=groups,
+        records_df=records_df,
+        args=args,
+        device=device,
+    )
 
 
 if __name__ == "__main__":

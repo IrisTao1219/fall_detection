@@ -1,10 +1,9 @@
 {
   "data_root": "data/keypoints_normalized",
-  "output_root": "results/rnn_lstm",
-  "model": "both",
+  "output_root": "results/lstm",
   "feature_mode": "xy66",
   "joint_indices": null,
-  "window_size": 24,
+  "window_size": 30,
   "stride": 1,
   "missing_mode": "zero",
   "visibility_threshold": 0.3,
