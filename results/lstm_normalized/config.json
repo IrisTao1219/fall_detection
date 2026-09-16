@@ -1,5 +1,5 @@
 {
-  "data_root": "data/keypoints",
+  "data_root": "data/keypoints_normalized",
   "output_root": "results",
   "feature_mode": "xy66",
   "joint_indices": null,
@@ -18,5 +18,5 @@
   "folds": 5,
   "seed": 42,
   "device": "auto",
-  "experiment_output_dir": "results/lstm"
+  "experiment_output_dir": "results/lstm_normalized"
 }

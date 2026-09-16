@@ -1,7 +1,7 @@
 ================================================================================
 MODEL: LSTM
 ================================================================================
-data_root: data/keypoints_normalized
+data_root: data/keypoints
 feature_mode: xy66
 input_dim: 66
 window_size: 30
@@ -24,106 +24,106 @@ train_videos: 56
 test_videos: 14
 train_windows: 7926
 test_windows: 1980
-accuracy: 0.849495
-precision: 0.679191
-recall: 0.556872
-f1: 0.611979
-roc_auc: 0.803996
-tn: 1447
-fp: 111
-fn: 187
-tp: 235
+accuracy: 0.920202
+precision: 0.890533
+recall: 0.713270
+f1: 0.792105
+roc_auc: 0.908678
+tn: 1521
+fp: 37
+fn: 121
+tp: 301
 
 [Fold 2/5]
 train_videos: 56
 test_videos: 14
 train_windows: 7931
 test_windows: 1975
-accuracy: 0.902278
-precision: 0.701940
-recall: 0.943128
-f1: 0.804853
-roc_auc: 0.929340
-tn: 1384
-fp: 169
-fn: 24
-tp: 398
+accuracy: 0.914937
+precision: 0.788636
+recall: 0.822275
+f1: 0.805104
+roc_auc: 0.915958
+tn: 1460
+fp: 93
+fn: 75
+tp: 347
 
 [Fold 3/5]
 train_videos: 56
 test_videos: 14
 train_windows: 7928
 test_windows: 1978
-accuracy: 0.941860
-precision: 0.838137
-recall: 0.900000
-f1: 0.867968
-roc_auc: 0.971146
-tn: 1485
-fp: 73
-fn: 42
-tp: 378
+accuracy: 0.927705
+precision: 0.863517
+recall: 0.783333
+f1: 0.821473
+roc_auc: 0.968235
+tn: 1506
+fp: 52
+fn: 91
+tp: 329
 
 [Fold 4/5]
 train_videos: 56
 test_videos: 14
 train_windows: 7915
 test_windows: 1991
-accuracy: 0.878453
-precision: 0.857143
-recall: 0.535469
-f1: 0.659155
-roc_auc: 0.854271
-tn: 1515
-fp: 39
-fn: 203
-tp: 234
+accuracy: 0.924159
+precision: 0.866667
+recall: 0.773455
+f1: 0.817412
+roc_auc: 0.975048
+tn: 1502
+fp: 52
+fn: 99
+tp: 338
 
 [Fold 5/5]
 train_videos: 56
 test_videos: 14
 train_windows: 7924
 test_windows: 1982
-accuracy: 0.884460
-precision: 0.715232
-recall: 0.764151
-f1: 0.738883
-roc_auc: 0.885000
-tn: 1429
-fp: 129
-fn: 100
-tp: 324
+accuracy: 0.928860
+precision: 0.954984
+recall: 0.700472
+f1: 0.808163
+roc_auc: 0.897188
+tn: 1544
+fp: 14
+fn: 127
+tp: 297
 
 ================================================================================
 OVERALL OUT-OF-FOLD METRICS
 ================================================================================
-accuracy: 0.891278
-precision: 0.750718
-recall: 0.738353
-f1: 0.744484
-roc_auc: 0.873062
-tn: 7260
-fp: 521
-fn: 556
-tp: 1569
+accuracy: 0.923178
+precision: 0.866667
+recall: 0.758588
+f1: 0.809034
+roc_auc: 0.923765
+tn: 7533
+fp: 248
+fn: 513
+tp: 1612
 
 Classification report:
               precision    recall  f1-score   support
 
-         ADL     0.9289    0.9330    0.9309      7781
-        Fall     0.7507    0.7384    0.7445      2125
+         ADL     0.9362    0.9681    0.9519      7781
+        Fall     0.8667    0.7586    0.8090      2125
 
-    accuracy                         0.8913      9906
-   macro avg     0.8398    0.8357    0.8377      9906
-weighted avg     0.8906    0.8913    0.8909      9906
+    accuracy                         0.9232      9906
+   macro avg     0.9015    0.8634    0.8805      9906
+weighted avg     0.9213    0.9232    0.9213      9906
 
 Confusion matrix [[TN, FP], [FN, TP]]:
-[[7260  521]
- [ 556 1569]]
+[[7533  248]
+ [ 513 1612]]
 
 Fold mean ± std:
-accuracy: 0.891309 ± 0.034045
-precision: 0.758329 ± 0.082815
-recall: 0.739924 ± 0.188953
-f1: 0.736568 ± 0.104223
-roc_auc: 0.888751 ± 0.064851
+accuracy: 0.923172 ± 0.005712
+precision: 0.872867 ± 0.059741
+recall: 0.758561 ± 0.050795
+f1: 0.808852 ± 0.011484
+roc_auc: 0.933021 ± 0.035965

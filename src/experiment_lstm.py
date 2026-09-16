@@ -655,8 +655,14 @@ def run_model_cv(
     args,
     device: torch.device,
 ) -> None:
-    model_dir = args.output_root
+    model_dir = args.experiment_output_dir
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    models_dir = model_dir / "models"
+    histories_dir = model_dir / "histories"
+
+    models_dir.mkdir(parents=True, exist_ok=True)
+    histories_dir.mkdir(parents=True, exist_ok=True)
 
     unique_groups = np.unique(groups)
     n_splits = min(args.folds, len(unique_groups))
@@ -830,13 +836,13 @@ def run_model_cv(
             if isinstance(v, Path):
                 checkpoint["args"][k] = str(v)
 
-        torch.save(checkpoint, model_dir / f"fold_{fold}.pt")
+        torch.save(checkpoint, models_dir / f"fold_{fold}.pt")
         pd.DataFrame(
             {
                 "epoch": np.arange(1, len(history) + 1),
                 "train_loss": history,
             }
-        ).to_csv(model_dir / f"fold_{fold}_history.csv", index=False)
+        ).to_csv(histories_dir / f"fold_{fold}_history.csv", index=False)
 
         all_true.extend(y_test.tolist())
         all_pred.extend(y_pred.tolist())
@@ -946,7 +952,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-root",
         type=Path,
-        default=Path("results/lstm"),
+        default=Path("results"),
+        help=(
+            "Base output directory. A dataset-specific subdirectory is "
+            "created automatically from --data-root, e.g. "
+            "results/lstm_normalized/."
+        ),
     )
     p.add_argument(
         "--feature-mode",
@@ -994,18 +1005,30 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def dataset_run_name(data_root: Path) -> str:
+    """Map raw / normalized keypoint datasets to flat LSTM result folders."""
+    name = data_root.resolve().name.lower()
+    return "lstm_normalized" if "normalized" in name else "lstm"
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
     args.joint_indices = parse_joint_indices(args.joint_indices)
-    args.output_root.mkdir(parents=True, exist_ok=True)
+
+    # One run = one data root. Store each dataset in its own output folder,
+    # so raw and normalized experiments are kept completely separate.
+    run_name = dataset_run_name(args.data_root)
+    args.experiment_output_dir = args.output_root / run_name
+    args.experiment_output_dir.mkdir(parents=True, exist_ok=True)
 
     seed_everything(args.seed)
     device = choose_device(args.device)
 
     print(f"Device: {device}")
     print(f"Data root: {args.data_root}")
+    print(f"Output dir: {args.experiment_output_dir}")
     print(
         f"Window={args.window_size}, stride={args.stride}, "
         f"feature_mode={args.feature_mode}, missing_mode={args.missing_mode}"
@@ -1026,7 +1049,7 @@ def main() -> None:
     for k, v in list(config.items()):
         if isinstance(v, Path):
             config[k] = str(v)
-    (args.output_root / "config.json").write_text(
+    (args.experiment_output_dir / "config.json").write_text(
         json.dumps(config, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )

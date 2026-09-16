@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import csv
 import json
 
@@ -24,15 +25,18 @@ from sklearn.model_selection import StratifiedGroupKFold
 # 后续跑不同实验，主要改这一部分
 # ============================================================
 
-EXPERIMENT_NAME = "rf_sliding_raw_1s_normalized"
+# 由命令行 --data-root 自动确定：
+#   data/keypoints            -> EXPERIMENT_NAME="rf"
+#   data/keypoints_normalized -> EXPERIMENT_NAME="rf_normalized"
+EXPERIMENT_NAME = None
 
 
 # ============================================================
 # 数据
 # ============================================================
 
-# DATA_ROOT = Path("data/keypoints")
-DATA_ROOT = Path("data/keypoints_normalized")
+# 由命令行 --data-root 传入
+DATA_ROOT = None
 
 # 原始 BlazePose：
 # keypoints -> [T, 33, 4]
@@ -150,14 +154,74 @@ N_JOBS = 8
 
 RESULT_ROOT = Path("results")
 
-RESULT_DIR = (
-    RESULT_ROOT
-    / EXPERIMENT_NAME
-)
+# 运行时由 --data-root 自动确定：
+#   results/rf/
+#   results/rf_normalized/
+RESULT_DIR = None
 
 SAVE_FINAL_MODEL = True
 
 SAVE_FEATURE_IMPORTANCE = True
+
+
+# ============================================================
+# 2. 命令行参数
+# ============================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Random Forest fall-detection experiment "
+            "with 30-frame sliding windows."
+        )
+    )
+
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        required=True,
+        help=(
+            "NPZ 数据目录，例如 data/keypoints "
+            "或 data/keypoints_normalized"
+        ),
+    )
+
+    parser.add_argument(
+        "--result-root",
+        type=Path,
+        default=Path("results"),
+        help="结果根目录，默认 results",
+    )
+
+    return parser.parse_args()
+
+
+def configure_experiment(args):
+    """
+    仅根据 --data-root 区分 raw / normalized 实验：
+
+        data/keypoints
+            -> results/rf/
+
+        data/keypoints_normalized
+            -> results/rf_normalized/
+    """
+    global DATA_ROOT
+    global RESULT_ROOT
+    global RESULT_DIR
+    global EXPERIMENT_NAME
+
+    DATA_ROOT = args.data_root
+    RESULT_ROOT = args.result_root
+
+    dataset_name = DATA_ROOT.resolve().name.lower()
+
+    if "normalized" in dataset_name:
+        EXPERIMENT_NAME = "rf_normalized"
+    else:
+        EXPERIMENT_NAME = "rf"
+
+    RESULT_DIR = RESULT_ROOT / EXPERIMENT_NAME
 
 
 # ============================================================
@@ -1694,6 +1758,15 @@ def save_config(
         "data_root":
             str(DATA_ROOT),
 
+        "result_dir":
+            str(RESULT_DIR),
+
+        "normalized_input":
+            bool(
+                "normalized"
+                in DATA_ROOT.resolve().name.lower()
+            ),
+
         "coordinate_field":
             COORDINATE_FIELD,
 
@@ -1828,9 +1901,24 @@ def train_final_model(
 
 def main():
 
+    args = parse_args()
+    configure_experiment(args)
+
     RESULT_DIR.mkdir(
         parents=True,
         exist_ok=True
+    )
+
+    print(
+        f"Data root: {DATA_ROOT}"
+    )
+
+    print(
+        f"Experiment: {EXPERIMENT_NAME}"
+    )
+
+    print(
+        f"Output dir: {RESULT_DIR}"
     )
 
     (

@@ -1,6 +1,8 @@
 {
-    "experiment_name": "rf_sliding_raw_1s",
+    "experiment_name": "rf",
     "data_root": "data/keypoints",
+    "result_dir": "results/rf",
+    "normalized_input": false,
     "coordinate_field": "keypoints",
     "coordinate_channels": [
         0,
