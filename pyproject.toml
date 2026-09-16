@@ -9,6 +9,15 @@ dependencies = [
     "opencv-python>=4.11.0.86",
     "pandas>=2.3.3",
     "scikit-learn>=1.9.1",
-    "torch>=2.14.0",
+    "torch==2.11.0",
     "tqdm>=4.70.1",
 ]
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
