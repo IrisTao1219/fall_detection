@@ -35,7 +35,8 @@ data/raw/
 
 帧文件名末尾须带数字帧号，例如 `-001.png`。类别由 `adl`、`fall` 两级目录名决定。原始数据与生成的关键点文件未纳入仓库。
 
-`data/download_urfd_adl.sh` 和 `data/download_urfd_falls.sh` 是下载脚本草稿；目前其中的压缩包输出路径使用 `/raw/...`，而解压步骤读取相对路径 `raw/...`，两者不一致。**不要直接照搬这些脚本作为完整的数据准备命令**，请先修正路径或手动下载并按上述结构解压。
+`data/download_urfd_adl.sh` 和 `data/download_urfd_falls.sh` 是下载脚本草稿
+（完成之后改了下文件目录结构，脚本可能路径有点问题需要自己修正）
 
 ## 运行实验
 
