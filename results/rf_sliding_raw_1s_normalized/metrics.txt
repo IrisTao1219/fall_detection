@@ -1,0 +1,91 @@
+Experiment: rf_sliding_raw_1s_normalized
+============================================================
+
+Videos: 70
+Windows: 8993
+Features: 1980
+Window seconds: 1.0
+Window stride: 1
+Folds: 5
+
+Per-Fold Results
+------------------------------------------------------------
+
+Fold 1/5
+Train videos : 56
+Test videos  : 14
+Train windows: 7200
+Test windows : 1793
+Accuracy : 0.8288
+Precision: 0.7280
+Recall   : 0.4183
+F1       : 0.5313
+ROC-AUC  : 0.9020
+
+Fold 2/5
+Train videos : 56
+Test videos  : 14
+Train windows: 7196
+Test windows : 1797
+Accuracy : 0.8670
+Precision: 0.7206
+Recall   : 0.7017
+F1       : 0.7110
+ROC-AUC  : 0.9171
+
+Fold 3/5
+Train videos : 56
+Test videos  : 14
+Train windows: 7177
+Test windows : 1816
+Accuracy : 0.9196
+Precision: 0.9472
+Recall   : 0.7028
+F1       : 0.8069
+ROC-AUC  : 0.9355
+
+Fold 4/5
+Train videos : 56
+Test videos  : 14
+Train windows: 7188
+Test windows : 1805
+Accuracy : 0.8654
+Precision: 0.6897
+Recall   : 0.7637
+F1       : 0.7248
+ROC-AUC  : 0.9315
+
+Fold 5/5
+Train videos : 56
+Test videos  : 14
+Train windows: 7211
+Test windows : 1782
+Accuracy : 0.8126
+Precision: 0.6407
+Recall   : 0.4532
+F1       : 0.5309
+ROC-AUC  : 0.8479
+
+============================================================
+Overall Results
+------------------------------------------------------------
+Accuracy : 0.8589
+Precision: 0.7419
+Recall   : 0.6090
+F1       : 0.6689
+ROC-AUC  : 0.9093
+
+Classification Report
+------------------------------------------------------------
+              precision    recall  f1-score   support
+
+         ADL     0.8867    0.9352    0.9103      6888
+        Fall     0.7419    0.6090    0.6689      2105
+
+    accuracy                         0.8589      8993
+   macro avg     0.8143    0.7721    0.7896      8993
+weighted avg     0.8528    0.8589    0.8538      8993
+
+Confusion Matrix
+[[6442  446]
+ [ 823 1282]]

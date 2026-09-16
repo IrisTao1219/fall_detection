@@ -12,7 +12,7 @@ from tqdm import tqdm
 # ============================================================
 
 DATA_ROOT = Path("data/raw")
-OUTPUT_ROOT = Path("data/pose")
+OUTPUT_ROOT = Path("data")
 
 # 所有视频均为 30 FPS
 FPS = 30.0
@@ -173,6 +173,7 @@ def process_video(
 
         vis_dir = (
             OUTPUT_ROOT
+            / "pose"
             / "visualization"
             / label
             / video_id
@@ -372,6 +373,7 @@ def process_video(
 
     output_dir = (
         OUTPUT_ROOT
+        / "keypoints"
         / label
     )
 
@@ -425,13 +427,8 @@ def process_video(
     )
 
     print(
-        f"检测成功: "
+        f"检测到人体: "
         f"{valid_count}/{num_frames}"
-    )
-
-    print(
-        f"检测成功率: "
-        f"{valid_count / num_frames:.2%}"
     )
 
 
