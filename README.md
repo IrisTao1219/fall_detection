@@ -77,6 +77,18 @@ uv run python src/experiment_rf.py
 
 ## 已有实验结果
 
+### MLP 实验程序
+
+新增 `src/experiment_mlp.py`，可作为将连续 30 帧关键点展平后分类的神经网络基线。从项目根目录运行：
+
+```bash
+uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
+```
+
+原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，包含窗口级和视频级折外预测、指标、训练曲线及各折模型。视频级结果按同一视频各窗口的跌倒概率平均后计算。
+
+目前仓库没有提交关键点 NPZ 数据，因此这里没有 MLP 实测指标。
+
 仓库已保存两组随机森林实验结果，均基于 70 段视频、8993 个窗口和 5 折按视频分组评估：
 
 | 输入 | 准确率 | 跌倒精确率 | 跌倒召回率 | 跌倒 F1 | ROC-AUC |
