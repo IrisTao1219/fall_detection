@@ -216,6 +216,7 @@ def build_frame_features(
 class WindowRecord:
     video_id: str
     source_file: str
+    window_start: int
     start_frame: int
     end_frame: int
     label: int
@@ -228,6 +229,7 @@ def make_windows(
     source_file: str,
     window_size: int,
     stride: int,
+    frame_indices: np.ndarray,
     valid_mask: Optional[np.ndarray] = None,
     min_valid_frames: int = 1,
     missing_mode: str = "interp",
@@ -235,6 +237,11 @@ def make_windows(
     frame_count = features.shape[0]
     if frame_count < window_size:
         return [], [], []
+    frame_indices = np.asarray(frame_indices).reshape(-1)
+    if len(frame_indices) != frame_count:
+        raise ValueError(
+            f"frame_indices length {len(frame_indices)} != feature frames {frame_count}"
+        )
 
     label_arr = np.asarray(label_data)
     is_frame_level = label_arr.ndim > 0 and label_arr.size == frame_count
@@ -280,8 +287,9 @@ def make_windows(
             WindowRecord(
                 video_id=video_id,
                 source_file=source_file,
-                start_frame=start_frame,
-                end_frame=end_exclusive - 1,
+                window_start=start_frame,
+                start_frame=int(frame_indices[start_frame]),
+                end_frame=int(frame_indices[end_exclusive - 1]),
                 label=window_label,
             )
         )
@@ -317,6 +325,11 @@ def load_all_windows(
             if "keypoints" not in data:
                 raise KeyError(f"{path}: missing 'keypoints'")
             keypoints = data["keypoints"]
+            frame_indices = (
+                np.asarray(data["frame_indices"]).reshape(-1)
+                if "frame_indices" in data
+                else np.arange(1, len(keypoints) + 1, dtype=np.int64)
+            )
             valid_mask = data["valid_mask"] if "valid_mask" in data else None
             label_data = data["label"] if "label" in data else path.parent.name
             if "video_id" in data:
@@ -343,6 +356,7 @@ def load_all_windows(
             source_file=str(path),
             window_size=window_size,
             stride=stride,
+            frame_indices=frame_indices,
             valid_mask=valid_mask,
             min_valid_frames=min_valid_frames,
             missing_mode=missing_mode,
@@ -504,30 +518,6 @@ def get_window_label_from_urfall(frame_labels) -> int | None:
     return None
 
 
-def _window_frame_bounds(records: pd.DataFrame, i: int, window_size: int):
-    """
-    从共享 loader 的 records 中取得真实帧范围。
-    优先使用 start_frame/end_frame；若没有，则使用零基 window_start/window_end。
-    """
-    row = records.iloc[i]
-
-    if {"start_frame", "end_frame"}.issubset(records.columns):
-        return int(row["start_frame"]), int(row["end_frame"])
-
-    if {"window_start", "window_end"}.issubset(records.columns):
-        # shared loader 通常把窗口位置记为 0-based。
-        return int(row["window_start"]) + 1, int(row["window_end"]) + 1
-
-    if "window_start" in records.columns:
-        start_frame = int(row["window_start"]) + 1
-        return start_frame, start_frame + window_size - 1
-
-    raise RuntimeError(
-        "load_all_windows() 返回的 records 中缺少帧范围字段；"
-        "需要 start_frame/end_frame 或 window_start/window_end"
-    )
-
-
 def apply_urfall_window_labels(
     x: np.ndarray,
     y: np.ndarray,
@@ -562,6 +552,7 @@ def apply_urfall_window_labels(
     new_labels = []
     skipped_transition_or_tie = 0
     skipped_no_annotation = 0
+    frame_indices_by_source = {}
 
     for i, group in enumerate(groups):
         sequence_name = canonical_sequence_name(group)
@@ -580,12 +571,26 @@ def apply_urfall_window_labels(
                 f"当前 group={group}"
             )
 
-        start_frame, end_frame = _window_frame_bounds(records, i, window_size)
+        row = records.iloc[i]
+        source_file = str(row["source_file"])
+        if source_file not in frame_indices_by_source:
+            with np.load(source_file, allow_pickle=True) as data:
+                frame_indices_by_source[source_file] = (
+                    np.asarray(data["frame_indices"]).reshape(-1)
+                    if "frame_indices" in data
+                    else np.arange(1, len(data["keypoints"]) + 1, dtype=np.int64)
+                )
+        start = int(row["window_start"])
+        window_frame_indices = frame_indices_by_source[source_file][
+            start : start + window_size
+        ]
+        if len(window_frame_indices) != window_size:
+            raise RuntimeError(f"{source_file}: 窗口帧数不足，起始位置 {start}")
 
         frame_labels = [
-            sequence_annotations[frame_number]
-            for frame_number in range(start_frame, end_frame + 1)
-            if frame_number in sequence_annotations
+            sequence_annotations[int(frame_number)]
+            for frame_number in window_frame_indices
+            if int(frame_number) in sequence_annotations
         ]
 
         if not frame_labels:
