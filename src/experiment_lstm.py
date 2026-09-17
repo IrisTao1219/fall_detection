@@ -977,7 +977,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Base output directory. A dataset-specific subdirectory is "
             "created automatically from --data-root, e.g. "
-            "results/lstm_normalized_rf_preprocess/."
+            "results/lstm_normalized/."
         ),
     )
     p.add_argument(
@@ -1029,9 +1029,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def dataset_run_name(data_root: Path) -> str:
-    """Keep RF-aligned reruns separate from the previously saved LSTM results."""
+    """Map raw and normalized inputs to the standard LSTM result folders."""
     name = data_root.resolve().name.lower()
-    return "lstm_normalized_rf_preprocess" if "normalized" in name else "lstm_rf_preprocess"
+    return "lstm_normalized" if "normalized" in name else "lstm"
 
 
 def main() -> None:
