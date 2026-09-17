@@ -2,9 +2,9 @@
 
 本课程项目用普通摄像头视频完成跌倒（`fall`）与日常活动（`adl`）二分类：先用 MediaPipe BlazePose 提取 33 个人体关键点，再比较不同分类模型对连续姿态的识别能力。研究目标与实验设计见上级目录的[《实验方案》](../实验方案.md)。
 
-当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF 和 LSTM 的结果已保存；MLP 程序已完成，尚待运行。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
+当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF 和 LSTM 的结果已保存；MLP 和 ST-GCN 程序已完成，尚待运行。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
 
-**当前进度：**已实现 URFD 图像帧的姿态提取、坐标归一化，并保存 RF 和 LSTM 各两组（原始坐标、归一化坐标）实验结果。MLP 实验程序已写好，尚无运行结果。报告提出的窗口长度、统一预处理对照及 ST-GCN/Transformer 扩展尚未完成。
+**当前进度：**已实现 URFD 图像帧的姿态提取、坐标归一化，并保存 RF 和 LSTM 各两组（原始坐标、归一化坐标）实验结果。MLP 和 ST-GCN 实验程序已写好，尚无运行结果。报告提出的窗口长度和统一预处理对照尚未完成。
 
 ## 环境准备
 
@@ -97,6 +97,17 @@ uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
 
 尚未发现 `results/mlp/` 或 `results/mlp_normalized/`，所以没有可报告的 MLP 实测指标。
 
+### 6. ST-GCN 实验程序（尚未运行）
+
+```bash
+uv run python src/experiment_stgcn.py --data-root data/keypoints
+uv run python src/experiment_stgcn.py --data-root data/keypoints_normalized
+```
+
+ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、1 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，进行空间图卷积和时间卷积。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。
+
+原始和归一化坐标的结果分别保存到 `results/stgcn/` 和 `results/stgcn_normalized/`。与 LSTM 相同，每折模型放在 `models/`，每折训练历史放在 `histories/`，`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。目前没有 ST-GCN 的实测指标。
+
 ## 已完成的实验与结果
 
 下表取自各结果目录的 `metrics.txt`，均为 **5 折折外窗口预测汇总指标**，其中 `fall` 为正类。四组实验都使用 70 段视频、30 帧窗口、1 帧步长和按视频分组的交叉验证；表中 LSTM 数值来自修改前的填零版本，新预处理版本尚未运行。表中数值不是视频级指标。
@@ -120,7 +131,7 @@ RF 使用窗口内时间插值，并跳过完全没有检测到人体的窗口�
 | --- | --- | --- |
 | 1. 分类器基线 | 固定 BlazePose，比较 RF、MLP、LSTM | RF、LSTM 已有原始与归一化坐标结果；运行已完成的 MLP 程序，补齐其两组指标。整理 Accuracy、跌倒 Recall、F1 和混淆矩阵。 |
 | 2. 单因素预处理对照 | 每次只改变归一化、缺失点处理或窗口长度中的一个因素 | 原始与归一化坐标对照已初步完成；LSTM 脚本现已对齐 RF 的窗口内插值和无效窗口过滤，但需要重跑。若要判断插值或窗口长度本身的作用，再在同一模型和评价规则下分别改变这些设置。 |
-| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | 尚未实现。若开展，固定输入与评估规则，并记录训练时间、参数量和推理延迟，与较简单的基线比较。 |
+| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | ST-GCN 程序已实现，待在完整数据上运行并与基线比较；Transformer 尚未实现。 |
 
 报告还建议每种配置使用多个随机种子，保存训练日志和划分信息，并报告结果的离散程度。现有结果只记录了单个种子，因此多种子重复实验仍待完成。遮挡或关键点噪声测试、跨人员或跨场景验证，以及减少关节点或压缩模型等轻量化实验属于进一步扩展，可在上述三阶段后按时间安排。
 
@@ -135,6 +146,7 @@ src/normalize_keypoints.py  # 姿态坐标归一化
 src/experiment_rf.py  # 滑动窗口、交叉验证和随机森林训练
 src/experiment_lstm.py  # LSTM 五折实验
 src/experiment_mlp.py   # MLP 五折实验程序，尚无实测结果
+src/experiment_stgcn.py  # ST-GCN 五折实验程序，尚无实测结果
 results/              # 已保存的实验配置、指标、预测及部分模型文件
 models/               # 其他已保存模型文件
 ```
