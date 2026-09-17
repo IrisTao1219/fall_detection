@@ -2,9 +2,9 @@
 
 本课程项目用普通摄像头视频完成跌倒（`fall`）与日常活动（`adl`）二分类：先用 MediaPipe BlazePose 提取 33 个人体关键点，再比较不同分类模型对连续姿态的识别能力。研究目标与实验设计见上级目录的[《实验方案》](../实验方案.md)。
 
-当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF、LSTM、MLP 和 ST-GCN 均已完成原始坐标与归一化坐标两组实验。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
+当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF、LSTM、MLP 和旧版三层 ST-GCN 均已完成原始坐标与归一化坐标两组实验；十层 ST-GCN 程序已写好，尚未运行。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
 
-**当前进度：**已实现 URFD 图像帧的姿态提取和坐标归一化，保存了四种分类模型共八组五折实验结果。窗口长度、缺失点处理等单因素对照，以及多个随机种子的重复实验尚未完成。
+**当前进度：**已实现 URFD 图像帧的姿态提取和坐标归一化，保存了四种分类模型共八组五折实验结果，其中 ST-GCN 结果来自旧版三层网络。新版十层网络、窗口长度和缺失点处理对照，以及多个随机种子的重复实验尚未完成运行。
 
 ## 环境准备
 
@@ -97,20 +97,20 @@ uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
 
 两组 MLP 结果已保存，具体指标见下表。当前仓库没有保存每折模型权重。
 
-### 6. 训练并评估 ST-GCN
+### 6. 训练并评估十层 ST-GCN
 
 ```bash
 uv run python src/experiment_stgcn.py --data-root data/keypoints
 uv run python src/experiment_stgcn.py --data-root data/keypoints_normalized
 ```
 
-ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、1 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，进行空间图卷积和时间卷积。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。
+ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、1 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，使用十个时空图卷积模块：前四层 64 通道、中间三层 128 通道、后三层 256 通道；时间卷积核大小为 9，每层包含残差连接和 Dropout，预测时用 Softmax 得到类别概率。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。当前只支持已有的 BlazePose 数据，尚未接入其他姿态提取器或数据集。
 
-原始和归一化坐标的结果分别保存到 `results/stgcn/` 和 `results/stgcn_normalized/`。与 LSTM 相同，程序将每折模型写入 `models/`，每折训练历史写入 `histories/`；`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。当前仓库没有保存每折模型权重。
+新版原始和归一化坐标实验将分别写入 `results/stgcn_10layer/` 和 `results/stgcn_10layer_normalized/`，与旧版三层结果分开。目录结构与 LSTM 相同：程序将每折模型写入 `models/`，每折训练历史写入 `histories/`；`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。新版目前没有实测结果。
 
 ## 已完成的实验与结果
 
-下表取自各结果目录的 `metrics.txt`，均为 **5 折折外窗口预测汇总指标**，其中 `fall` 为正类。八组结果都覆盖 70 段视频、8993 个 30 帧窗口，步长为 1 帧，并按视频分组评估。各组保存的配置均采用窗口内插值。表中数值不是视频级指标。
+下表取自各结果目录的 `metrics.txt`，均为 **5 折折外窗口预测汇总指标**，其中 `fall` 为正类。八组结果都覆盖 70 段视频、8993 个 30 帧窗口，步长为 1 帧，并按视频分组评估。各组保存的配置均采用窗口内插值。ST-GCN 两行属于旧版三层网络，不能代表新版十层网络；表中数值不是视频级指标。
 
 | 模型 | 输入 | 窗口数 | 准确率 | 跌倒精确率 | 跌倒召回率 | 跌倒 F1 | ROC-AUC | 结果目录 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -120,8 +120,8 @@ ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、3
 | LSTM | 归一化 `x/y` | 8993 | 0.8621 | 0.7161 | 0.6808 | 0.6980 | 0.8661 | [`results/lstm_normalized/`](results/lstm_normalized/) |
 | MLP | 原始 `x/y` | 8993 | 0.8453 | 0.6440 | 0.7587 | 0.6966 | 0.8736 | [`results/mlp/`](results/mlp/) |
 | MLP | 归一化 `x/y` | 8993 | 0.8602 | 0.7033 | 0.6969 | 0.7001 | 0.8313 | [`results/mlp_normalized/`](results/mlp_normalized/) |
-| ST-GCN | 原始 `x/y` | 8993 | 0.8949 | 0.7458 | 0.8361 | 0.7884 | 0.9475 | [`results/stgcn/`](results/stgcn/) |
-| ST-GCN | 归一化 `x/y` | 8993 | 0.7752 | 0.5179 | 0.5696 | 0.5425 | 0.7395 | [`results/stgcn_normalized/`](results/stgcn_normalized/) |
+| ST-GCN（旧版三层） | 原始 `x/y` | 8993 | 0.8949 | 0.7458 | 0.8361 | 0.7884 | 0.9475 | [`results/stgcn/`](results/stgcn/) |
+| ST-GCN（旧版三层） | 归一化 `x/y` | 8993 | 0.7752 | 0.5179 | 0.5696 | 0.5425 | 0.7395 | [`results/stgcn_normalized/`](results/stgcn_normalized/) |
 
 八组结果使用相同的视频与窗口位置；RF 预测文件的 `window_start/window_end` 是从零开始的窗口位置，`start_frame/end_frame` 对应原始帧号。原始坐标下，LSTM 的窗口级 F1 最高（0.8355），ST-GCN 的跌倒召回率最高（0.8361）；归一化坐标下，MLP 的 F1 最高（0.7001）。除 MLP 外，同一模型的原始坐标 F1 高于归一化坐标。当前只有一个随机种子，且各模型训练过程不同，这些差值不宜直接归因于某一种结构或预处理。
 
@@ -137,7 +137,7 @@ ST-GCN 还输出视频级结果：原始坐标 F1 为 0.9667（70 段视频中 6
 | --- | --- | --- |
 | 1. 分类器基线 | 固定 BlazePose，比较 RF、MLP、LSTM | 三种模型的原始与归一化坐标结果均已保存；下一步可整理多随机种子重复结果。 |
 | 2. 单因素预处理对照 | 每次只改变归一化、缺失点处理或窗口长度中的一个因素 | 原始与归一化坐标对照已完成单种子实验；缺失点处理和窗口长度对照尚未完成。 |
-| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | ST-GCN 两组结果已保存；Transformer 尚未实现。可在统一重复实验后比较模型表现与训练成本。 |
+| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | 旧版三层 ST-GCN 两组结果已保存；新版十层程序待运行，Transformer 尚未实现。可在统一重复实验后比较模型表现与训练成本。 |
 
 报告还建议每种配置使用多个随机种子，保存训练日志和划分信息，并报告结果的离散程度。现有结果只记录了单个种子，因此多种子重复实验仍待完成。遮挡或关键点噪声测试、跨人员或跨场景验证，以及减少关节点或压缩模型等轻量化实验属于进一步扩展，可在上述三阶段后按时间安排。
 
@@ -152,7 +152,7 @@ src/normalize_keypoints.py  # 姿态坐标归一化
 src/experiment_rf.py  # 滑动窗口、交叉验证和随机森林训练
 src/experiment_lstm.py  # LSTM 五折实验
 src/experiment_mlp.py   # MLP 五折实验
-src/experiment_stgcn.py  # ST-GCN 五折实验
+src/experiment_stgcn.py  # 十层 ST-GCN 五折实验；现存 ST-GCN 结果来自旧版三层程序
 results/              # 已保存的实验配置、指标、预测及部分模型文件
 models/               # 其他已保存模型文件
 ```

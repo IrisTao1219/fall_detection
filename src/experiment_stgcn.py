@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""ST-GCN experiment on the same BlazePose windows as the LSTM baseline.
+"""Ten-block ST-GCN experiment on the LSTM baseline's BlazePose windows.
 
 Run from the fall_detection directory with
 ``uv run python src/experiment_stgcn.py --data-root data/keypoints_normalized``.
 The shared loader keeps window extraction and filtering identical to the
 current XY LSTM and MLP experiments.
+
+The network uses four 64-channel, three 128-channel, and three 256-channel
+spatiotemporal graph blocks. Each block has a temporal kernel of size 9,
+a residual path, and dropout. Softmax is applied when obtaining probabilities;
+training uses logits with CrossEntropyLoss.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ POSE_EDGES = (
     (24, 26), (25, 27), (26, 28), (27, 29), (28, 30), (29, 31),
     (30, 32), (27, 31), (28, 32),
 )
+STGCN_CHANNELS = (64,) * 4 + (128,) * 3 + (256,) * 3
+TEMPORAL_KERNEL_SIZE = 9
 
 
 def make_adjacency() -> torch.Tensor:
@@ -47,14 +54,15 @@ def make_adjacency() -> torch.Tensor:
 
 
 class STGCNBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int):
+    def __init__(self, in_channels: int, out_channels: int, stride: int, dropout: float):
         super().__init__()
         self.spatial = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         self.temporal = nn.Conv2d(
-            out_channels, out_channels, kernel_size=(9, 1),
-            stride=(stride, 1), padding=(4, 0),
+            out_channels, out_channels, kernel_size=(TEMPORAL_KERNEL_SIZE, 1),
+            stride=(stride, 1), padding=(TEMPORAL_KERNEL_SIZE // 2, 0),
         )
         self.norm = nn.BatchNorm2d(out_channels)
+        self.dropout = nn.Dropout2d(dropout)
         self.residual = (
             nn.Identity() if in_channels == out_channels and stride == 1
             else nn.Sequential(
@@ -66,24 +74,30 @@ class STGCNBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, adjacency: torch.Tensor) -> torch.Tensor:
         spatial = torch.einsum("bctv,vw->bctw", x, adjacency)
-        return self.activation(self.norm(self.temporal(self.spatial(spatial))) + self.residual(x))
+        features = self.dropout(self.norm(self.temporal(self.spatial(spatial))))
+        return self.activation(features + self.residual(x))
 
 
 class STGCN(nn.Module):
     def __init__(self, dropout: float = 0.3):
         super().__init__()
         self.register_buffer("adjacency", make_adjacency())
-        self.blocks = nn.ModuleList((
-            STGCNBlock(2, 32, 1), STGCNBlock(32, 64, 2),
-            STGCNBlock(64, 128, 2),
-        ))
-        self.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(128, 2))
+        blocks = []
+        in_channels = 2
+        for layer, out_channels in enumerate(STGCN_CHANNELS):
+            # Reduce temporal resolution when entering a wider channel stage.
+            stride = 2 if layer in (4, 7) else 1
+            blocks.append(STGCNBlock(in_channels, out_channels, stride, dropout))
+            in_channels = out_channels
+        self.blocks = nn.ModuleList(blocks)
+        self.classifier = nn.Linear(STGCN_CHANNELS[-1], 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Loader supplies [B,T,66]; graph layers use [B,C,T,V].
         x = x.reshape(x.shape[0], x.shape[1], 33, 2).permute(0, 3, 1, 2)
         for block in self.blocks:
             x = block(x, self.adjacency)
+        # Keep logits for CrossEntropyLoss. Prediction uses Softmax in probabilities().
         return self.classifier(x.mean(dim=(2, 3)))
 
 
@@ -156,6 +170,8 @@ def main():
     args = parse_args()
     if min(args.window_size, args.stride, args.patience, args.epochs, args.batch_size) < 1 or args.folds < 2:
         raise ValueError("Window size, stride, patience, epochs, batch size must be positive; folds >= 2")
+    if not 0 <= args.dropout < 1:
+        raise ValueError("dropout must be in [0, 1)")
     seed_everything(args.seed)
     device = choose_device(args.device)
     x, y, groups, records = load_all_windows(
@@ -166,7 +182,7 @@ def main():
     class_groups = np.bincount(group_labels.to_numpy(), minlength=2)
     if class_groups.min() < args.folds:
         raise ValueError(f"Need at least {args.folds} videos per class; found {class_groups.tolist()}")
-    run_name = "stgcn_normalized" if "normalized" in args.data_root.resolve().name.lower() else "stgcn"
+    run_name = "stgcn_10layer_normalized" if "normalized" in args.data_root.resolve().name.lower() else "stgcn_10layer"
     output = args.output_root / run_name
     output.mkdir(parents=True, exist_ok=True)
     models_dir = output / "models"
@@ -194,7 +210,9 @@ def main():
             for video_id in np.unique(groups[indices]):
                 split_rows.append({"fold": fold, "video_id": video_id, "role": role})
         torch.save({"state_dict": model.state_dict(), "feature_mean": mean, "feature_std": std,
-                    "best_epoch": best_epoch, "dropout": args.dropout}, models_dir / f"fold_{fold}.pt")
+                    "best_epoch": best_epoch, "dropout": args.dropout,
+                    "channels": STGCN_CHANNELS, "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+                    "pose_extractor": "BlazePose"}, models_dir / f"fold_{fold}.pt")
         pd.DataFrame(history).to_csv(histories_dir / f"fold_{fold}_history.csv", index=False)
         print(f"Fold {fold}: F1={metrics['f1']:.4f}, recall={metrics['recall']:.4f}, best epoch={best_epoch}")
 
@@ -219,7 +237,9 @@ def main():
                "video_report": classification_report(video_df.label, video_df.y_pred, labels=[0, 1],
                                                        target_names=["ADL", "Fall"], zero_division=0),
                "video_confusion_matrix": confusion_matrix(video_df.label, video_df.y_pred, labels=[0, 1]).tolist(),
-               "parameter_count": sum(p.numel() for p in model.parameters()), "device": str(device)}
+               "parameter_count": sum(p.numel() for p in model.parameters()), "device": str(device),
+               "channels": STGCN_CHANNELS, "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+               "pose_extractor": "BlazePose"}
     (output / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     pd.DataFrame(
         confusion_matrix(window_df.label, window_df.y_pred, labels=[0, 1]),
@@ -235,6 +255,8 @@ def main():
     metric_lines.extend(["", "Classification report:", report])
     (output / "metrics.txt").write_text("\n".join(metric_lines), encoding="utf-8")
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
+    config.update({"channels": STGCN_CHANNELS, "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+                   "pose_extractor": "BlazePose"})
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     print(f"Video-level F1={video_metrics['f1']:.4f}, recall={video_metrics['recall']:.4f}")
     print(f"Results: {output}")
