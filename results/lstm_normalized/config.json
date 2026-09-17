@@ -5,7 +5,8 @@
   "joint_indices": null,
   "window_size": 30,
   "stride": 1,
-  "missing_mode": "zero",
+  "missing_mode": "interp",
+  "min_valid_frames": 1,
   "visibility_threshold": 0.3,
   "hidden_size": 80,
   "num_layers": 10,
@@ -18,5 +19,5 @@
   "folds": 5,
   "seed": 42,
   "device": "auto",
-  "experiment_output_dir": "results/lstm_normalized"
+  "experiment_output_dir": "results/lstm_normalized_rf_preprocess"
 }
