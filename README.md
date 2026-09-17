@@ -93,7 +93,7 @@ uv run python src/experiment_lstm.py --data-root data/keypoints_normalized
 uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
 ```
 
-原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，包含窗口级和视频级折外预测、指标、训练曲线及各折模型。视频级结果按同一视频各窗口的跌倒概率平均后计算。
+原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`：每折 `.pt` 模型放在 `models/`，训练历史、预测和分折指标等 CSV 放在 `historys/`，配置与总体指标 JSON 放在结果目录根部。视频级结果按同一视频各窗口的跌倒概率平均后计算。
 
 尚未发现 `results/mlp/` 或 `results/mlp_normalized/`，所以没有可报告的 MLP 实测指标。
 

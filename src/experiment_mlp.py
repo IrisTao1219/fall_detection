@@ -146,6 +146,10 @@ def main():
     run_name = "mlp_normalized" if "normalized" in args.data_root.resolve().name.lower() else "mlp"
     output = args.output_root / run_name
     output.mkdir(parents=True, exist_ok=True)
+    models_dir = output / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    history_dir = output / "historys"
+    history_dir.mkdir(parents=True, exist_ok=True)
 
     x, y, groups, records = load_all_windows(
         args.data_root, args.window_size, args.stride,
@@ -178,23 +182,23 @@ def main():
             "hidden": args.hidden, "dropout": args.dropout,
             "feature_mean": mean, "feature_std": std,
             "best_epoch": best_epoch,
-        }, output / f"fold_{fold}.pt")
-        pd.DataFrame(history).to_csv(output / f"fold_{fold}_history.csv", index=False)
+        }, models_dir / f"fold_{fold}.pt")
+        pd.DataFrame(history).to_csv(history_dir / f"fold_{fold}_history.csv", index=False)
         print(f"Fold {fold}: test F1={metrics['f1']:.4f}, recall={metrics['recall']:.4f}; best epoch={best_epoch}")
 
     window_df = pd.concat(predictions, ignore_index=True)
-    window_df.to_csv(output / "window_predictions.csv", index=False)
+    window_df.to_csv(history_dir / "window_predictions.csv", index=False)
     # One score per video avoids weighting long videos more heavily in the main result.
     video_df = window_df.groupby("video_id", as_index=False).agg(
         fold=("fold", "first"), label=("label", "first"),
         fall_probability=("fall_probability", "mean"), windows=("label", "size"),
     )
     video_df["y_pred"] = (video_df["fall_probability"] >= 0.5).astype(int)
-    video_df.to_csv(output / "video_predictions.csv", index=False)
+    video_df.to_csv(history_dir / "video_predictions.csv", index=False)
     for fold, part in video_df.groupby("fold"):
         video_rows.append({"fold": fold, **compute_metrics(part.label.to_numpy(), part.y_pred.to_numpy(), part.fall_probability.to_numpy())})
-    pd.DataFrame(fold_rows).to_csv(output / "fold_metrics.csv", index=False)
-    pd.DataFrame(video_rows).to_csv(output / "video_fold_metrics.csv", index=False)
+    pd.DataFrame(fold_rows).to_csv(history_dir / "fold_metrics.csv", index=False)
+    pd.DataFrame(video_rows).to_csv(history_dir / "video_fold_metrics.csv", index=False)
 
     window_metrics = compute_metrics(window_df.label.to_numpy(), window_df.y_pred.to_numpy(), window_df.fall_probability.to_numpy())
     video_metrics = compute_metrics(video_df.label.to_numpy(), video_df.y_pred.to_numpy(), video_df.fall_probability.to_numpy())
