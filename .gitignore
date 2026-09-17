@@ -1,3 +1,6 @@
-/data
+/data/raw
+/data/keypoints
+/data/keypoints_normalized
+/data/pose
 .venv
 models/

@@ -1,0 +1,51 @@
+{
+  "video": {
+    "accuracy": 0.9714285714285714,
+    "precision": 0.9666666666666667,
+    "recall": 0.9666666666666667,
+    "f1": 0.9666666666666667,
+    "roc_auc": 0.9891666666666666,
+    "tn": 39,
+    "fp": 1,
+    "fn": 1,
+    "tp": 29
+  },
+  "window": {
+    "accuracy": 0.9007005448682308,
+    "precision": 0.7533444816053512,
+    "recall": 0.8560570071258907,
+    "f1": 0.8014231710028908,
+    "roc_auc": 0.9599394519988633,
+    "tn": 6298,
+    "fp": 590,
+    "fn": 303,
+    "tp": 1802
+  },
+  "video_report": "              precision    recall  f1-score   support\n\n         ADL       0.97      0.97      0.97        40\n        Fall       0.97      0.97      0.97        30\n\n    accuracy                           0.97        70\n   macro avg       0.97      0.97      0.97        70\nweighted avg       0.97      0.97      0.97        70\n",
+  "video_confusion_matrix": [
+    [
+      39,
+      1
+    ],
+    [
+      1,
+      29
+    ]
+  ],
+  "parameter_count": 2625090,
+  "device": "cuda",
+  "channels": [
+    64,
+    64,
+    64,
+    64,
+    128,
+    128,
+    128,
+    256,
+    256,
+    256
+  ],
+  "temporal_kernel_size": 9,
+  "pose_extractor": "BlazePose"
+}
