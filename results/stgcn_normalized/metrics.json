@@ -1,37 +1,51 @@
 {
   "video": {
     "accuracy": 0.8428571428571429,
-    "precision": 0.88,
-    "recall": 0.7333333333333333,
-    "f1": 0.8,
-    "roc_auc": 0.89,
-    "tn": 37,
-    "fp": 3,
-    "fn": 8,
-    "tp": 22
+    "precision": 0.8275862068965517,
+    "recall": 0.8,
+    "f1": 0.8135593220338984,
+    "roc_auc": 0.9241666666666667,
+    "tn": 35,
+    "fp": 5,
+    "fn": 6,
+    "tp": 24
   },
   "window": {
-    "accuracy": 0.775158456577338,
-    "precision": 0.5179265658747301,
-    "recall": 0.5695961995249407,
-    "f1": 0.5425339366515837,
-    "roc_auc": 0.7394890697719328,
-    "tn": 5772,
-    "fp": 1116,
-    "fn": 906,
-    "tp": 1199
+    "accuracy": 0.7582564216612921,
+    "precision": 0.48563098708871305,
+    "recall": 0.5539192399049881,
+    "f1": 0.5175321793164669,
+    "roc_auc": 0.7510500550373674,
+    "tn": 5653,
+    "fp": 1235,
+    "fn": 939,
+    "tp": 1166
   },
-  "video_report": "              precision    recall  f1-score   support\n\n         ADL       0.82      0.93      0.87        40\n        Fall       0.88      0.73      0.80        30\n\n    accuracy                           0.84        70\n   macro avg       0.85      0.83      0.84        70\nweighted avg       0.85      0.84      0.84        70\n",
+  "video_report": "              precision    recall  f1-score   support\n\n         ADL       0.85      0.88      0.86        40\n        Fall       0.83      0.80      0.81        30\n\n    accuracy                           0.84        70\n   macro avg       0.84      0.84      0.84        70\nweighted avg       0.84      0.84      0.84        70\n",
   "video_confusion_matrix": [
     [
-      37,
-      3
+      35,
+      5
     ],
     [
-      8,
-      22
+      6,
+      24
     ]
   ],
-  "parameter_count": 215970,
-  "device": "cuda"
+  "parameter_count": 2625090,
+  "device": "cuda",
+  "channels": [
+    64,
+    64,
+    64,
+    64,
+    128,
+    128,
+    128,
+    256,
+    256,
+    256
+  ],
+  "temporal_kernel_size": 9,
+  "pose_extractor": "BlazePose"
 }
