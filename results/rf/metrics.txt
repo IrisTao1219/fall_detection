@@ -2,7 +2,7 @@ Experiment: rf
 ============================================================
 
 Videos: 70
-Windows: 8993
+Windows: 8963
 Features: 1980
 Window seconds: 1.0
 Window stride: 1
@@ -14,78 +14,78 @@ Per-Fold Results
 Fold 1/5
 Train videos : 56
 Test videos  : 14
-Train windows: 7200
-Test windows : 1793
-Accuracy : 0.8673
-Precision: 0.6831
-Recall   : 0.7981
-F1       : 0.7361
-ROC-AUC  : 0.9254
+Train windows: 7131
+Test windows : 1832
+Accuracy : 0.9869
+Precision: 0.9880
+Recall   : 0.8824
+F1       : 0.9322
+ROC-AUC  : 0.9992
 
 Fold 2/5
-Train videos : 56
-Test videos  : 14
-Train windows: 7196
-Test windows : 1797
-Accuracy : 0.9827
-Precision: 0.9826
-Recall   : 0.9427
-F1       : 0.9622
-ROC-AUC  : 0.9940
+Train videos : 59
+Test videos  : 11
+Train windows: 7246
+Test windows : 1717
+Accuracy : 0.9965
+Precision: 0.9742
+Recall   : 0.9947
+F1       : 0.9844
+ROC-AUC  : 0.9997
 
 Fold 3/5
-Train videos : 56
-Test videos  : 14
-Train windows: 7177
-Test windows : 1816
-Accuracy : 0.9273
-Precision: 0.8932
-Recall   : 0.7903
-F1       : 0.8386
-ROC-AUC  : 0.9385
+Train videos : 53
+Test videos  : 17
+Train windows: 7146
+Test windows : 1817
+Accuracy : 0.9873
+Precision: 0.9503
+Recall   : 0.9107
+F1       : 0.9301
+ROC-AUC  : 0.9988
 
 Fold 4/5
-Train videos : 56
-Test videos  : 14
-Train windows: 7188
-Test windows : 1805
-Accuracy : 0.9247
-Precision: 0.8546
-Recall   : 0.8138
-F1       : 0.8337
-ROC-AUC  : 0.9759
+Train videos : 55
+Test videos  : 15
+Train windows: 7083
+Test windows : 1880
+Accuracy : 0.9261
+Precision: 0.5551
+Recall   : 0.8690
+F1       : 0.6775
+ROC-AUC  : 0.9653
 
 Fold 5/5
-Train videos : 56
-Test videos  : 14
-Train windows: 7211
-Test windows : 1782
-Accuracy : 0.8765
-Precision: 0.7775
-Recall   : 0.6619
-F1       : 0.7150
-ROC-AUC  : 0.9162
+Train videos : 57
+Test videos  : 13
+Train windows: 7246
+Test windows : 1717
+Accuracy : 0.9598
+Precision: 0.9810
+Recall   : 0.6059
+F1       : 0.7491
+ROC-AUC  : 0.9933
 
 ============================================================
 Overall Results
 ------------------------------------------------------------
-Accuracy : 0.9158
-Precision: 0.8327
-Recall   : 0.8014
-F1       : 0.8168
-ROC-AUC  : 0.9507
+Accuracy : 0.9709
+Precision: 0.8494
+Recall   : 0.8562
+F1       : 0.8528
+ROC-AUC  : 0.9891
 
 Classification Report
 ------------------------------------------------------------
               precision    recall  f1-score   support
 
-         ADL     0.9400    0.9508    0.9454      6888
-        Fall     0.8327    0.8014    0.8168      2105
+         ADL     0.9843    0.9834    0.9838      8080
+        Fall     0.8494    0.8562    0.8528       883
 
-    accuracy                         0.9158      8993
-   macro avg     0.8863    0.8761    0.8811      8993
-weighted avg     0.9149    0.9158    0.9153      8993
+    accuracy                         0.9709      8963
+   macro avg     0.9169    0.9198    0.9183      8963
+weighted avg     0.9710    0.9709    0.9709      8963
 
 Confusion Matrix
-[[6549  339]
- [ 418 1687]]
+[[7946  134]
+ [ 127  756]]

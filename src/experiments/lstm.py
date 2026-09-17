@@ -6,8 +6,9 @@ Compatible with the user's existing NPZ structure:
     keypoints:   [T, 33, 4] -> x, y, z, visibility
     valid_mask:  [T]
     fps:         scalar
-    label:       scalar ("adl"/"fall" or 0/1), OR optional frame-level labels [T]
+    label:       scalar video type ("adl"/"fall" or 0/1)
     video_id:    scalar
+    frame_indices: optional [T]; if absent, 1..T is used for CSV matching
 
 Default experiment:
 - feature: all BlazePose x/y coordinates -> 33 * 2 = 66 dims per frame
@@ -17,6 +18,7 @@ Default experiment:
 - discard windows with no detected pose frames (matching RF)
 - LSTM: 10 recurrent layers, 80 hidden units
 - BatchNorm after input and recurrent outputs
+- window labels: UR-Fall official CSV, ignore 0 then majority vote -1 vs 1
 - video-grouped 5-fold CV to prevent windows from the same video leaking
   across train/test folds
 - metrics: Accuracy, Precision, Recall, F1, ROC-AUC,
@@ -49,6 +51,7 @@ import argparse
 import json
 import math
 import random
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -87,6 +90,11 @@ LABEL_MAP = {
 }
 
 CLASS_NAMES = ["ADL", "Fall"]
+
+# UR-Fall official frame-level posture annotations (fall sequences only).
+# First 3 columns: sequence name, frame number, posture label
+# posture label: -1=not lying, 0=falling transition, 1=lying
+FALL_ANNOTATION_CSV = Path("data/urfall-cam0-falls.csv")
 
 
 # -----------------------------
@@ -145,6 +153,111 @@ def normalize_label(value) -> int:
 
 def normalize_label_array(values: np.ndarray) -> np.ndarray:
     return np.asarray([normalize_label(v) for v in values], dtype=np.int64)
+
+
+def canonical_sequence_name(value) -> Optional[str]:
+    """Normalize IDs like fall-01-cam0-d / fall-01-cam0-rgb to fall-01."""
+    value = str(value).strip().lower()
+    match = re.search(r"(fall|adl)-?(\d+)", value)
+    if match is None:
+        return None
+    prefix = match.group(1)
+    number = int(match.group(2))
+    return f"{prefix}-{number:02d}"
+
+
+def load_fall_frame_labels(csv_path: Path) -> Dict[str, Dict[int, int]]:
+    """Load UR-Fall official per-frame posture labels from the first 3 CSV columns."""
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"UR-Fall annotation CSV not found: {csv_path}")
+
+    annotations: Dict[str, Dict[int, int]] = {}
+    valid_rows = 0
+
+    with csv_path.open("r", encoding="utf-8-sig") as f:
+        for line_number, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if "," in line:
+                row = [x.strip() for x in line.split(",")]
+            elif ";" in line:
+                row = [x.strip() for x in line.split(";")]
+            elif "\t" in line:
+                row = [x.strip() for x in line.split("\t")]
+            else:
+                row = line.split()
+
+            if len(row) < 3:
+                continue
+
+            sequence_name = canonical_sequence_name(row[0])
+            try:
+                frame_number = int(float(row[1]))
+                posture_label = int(float(row[2]))
+            except ValueError:
+                # Header or malformed row.
+                continue
+
+            if sequence_name is None or not sequence_name.startswith("fall-"):
+                continue
+            if posture_label not in (-1, 0, 1):
+                raise ValueError(
+                    f"{csv_path} line {line_number}: unknown posture label {posture_label}"
+                )
+
+            annotations.setdefault(sequence_name, {})[frame_number] = posture_label
+            valid_rows += 1
+
+    if valid_rows == 0:
+        raise RuntimeError(f"No valid UR-Fall annotations read from {csv_path}")
+
+    print(
+        f"Loaded UR-Fall annotations: {len(annotations)} fall sequences | "
+        f"{valid_rows} annotated frames"
+    )
+    return annotations
+
+
+def get_window_label_from_urfall(frame_labels: Sequence[int]) -> Optional[int]:
+    """
+    Convert UR-Fall posture labels to one binary window label.
+
+    Same rule as the RF/ST-GCN/MLP experiments:
+      - ignore posture label 0 (falling transition)
+      - -1 -> ADL/non-fall (0)
+      -  1 -> Fall (1)
+      - majority vote over the remaining labels
+      - no remaining labels or an exact tie -> None (drop the window)
+    """
+    labels = np.asarray(frame_labels, dtype=np.int8)
+    labels = labels[labels != 0]
+
+    if labels.size == 0:
+        return None
+
+    normal_count = int(np.sum(labels == -1))
+    fall_count = int(np.sum(labels == 1))
+
+    if fall_count > normal_count:
+        return 1
+    if normal_count > fall_count:
+        return 0
+    return None
+
+
+def video_type_label(value) -> int:
+    """Return the original UR-Fall video class for CV stratification."""
+    sequence_name = canonical_sequence_name(value)
+    if sequence_name is None:
+        raise ValueError(f"Cannot infer UR-Fall video type from: {value!r}")
+    return 1 if sequence_name.startswith("fall-") else 0
+
+
+def video_type_labels(groups: np.ndarray) -> np.ndarray:
+    return np.asarray([video_type_label(g) for g in groups], dtype=np.int64)
 
 
 # -----------------------------
@@ -280,11 +393,13 @@ class WindowRecord:
 
 def make_windows(
     features: np.ndarray,
-    label_data,
+    video_level_label: int,
     video_id: str,
     source_file: str,
     window_size: int,
     stride: int,
+    frame_indices: np.ndarray,
+    sequence_annotations: Optional[Dict[int, int]],
     valid_mask: Optional[np.ndarray] = None,
     min_valid_frames: int = 1,
     missing_mode: str = "interp",
@@ -294,16 +409,11 @@ def make_windows(
     if T < window_size:
         return [], [], []
 
-    # Scalar video-level label OR frame-level labels.
-    label_arr = np.asarray(label_data)
-    is_frame_level = label_arr.ndim > 0 and label_arr.size == T
-
-    if is_frame_level:
-        frame_labels = normalize_label_array(label_arr.reshape(-1))
-        scalar_label = None
-    else:
-        scalar_label = normalize_label(label_data)
-        frame_labels = None
+    frame_indices = np.asarray(frame_indices).reshape(-1)
+    if len(frame_indices) != T:
+        raise ValueError(
+            f"frame_indices length {len(frame_indices)} != feature frames {T}"
+        )
 
     X_list: List[np.ndarray] = []
     y_list: List[int] = []
@@ -311,8 +421,36 @@ def make_windows(
 
     for start in range(0, T - window_size + 1, stride):
         end = start + window_size
-        if valid_mask is not None and int(np.count_nonzero(valid_mask[start:end])) < min_valid_frames:
+
+        if (
+            valid_mask is not None
+            and int(np.count_nonzero(valid_mask[start:end])) < min_valid_frames
+        ):
             continue
+
+        # Window label: exactly the same UR-Fall CSV rule as RF/ST-GCN/MLP.
+        if video_level_label == 0:
+            # ADL videos are normal for the whole sequence.
+            y_win = 0
+        else:
+            if sequence_annotations is None:
+                raise RuntimeError(
+                    f"Missing frame annotations for fall video {video_id}"
+                )
+
+            posture_labels: List[int] = []
+            for frame_number in frame_indices[start:end]:
+                posture_label = sequence_annotations.get(int(frame_number))
+                if posture_label is not None:
+                    posture_labels.append(posture_label)
+
+            y_from_csv = get_window_label_from_urfall(posture_labels)
+            if y_from_csv is None:
+                # All annotated frames are posture 0, no annotations are present,
+                # or -1/1 are tied after ignoring 0.
+                continue
+            y_win = int(y_from_csv)
+
         x_win = features[start:end].copy()
         if missing_mode == "interp":
             for feature_idx in range(x_win.shape[1]):
@@ -322,24 +460,14 @@ def make_windows(
         else:
             raise ValueError(f"Unknown missing_mode: {missing_mode}")
 
-        if frame_labels is not None:
-            values, counts = np.unique(frame_labels[start:end], return_counts=True)
-            # Majority label. On a tie, choose Fall (1) to avoid silently
-            # suppressing a fall-containing window.
-            max_count = counts.max()
-            candidates = values[counts == max_count]
-            y_win = int(candidates.max())
-        else:
-            y_win = int(scalar_label)
-
         X_list.append(x_win.astype(np.float32))
         y_list.append(y_win)
         records.append(
             WindowRecord(
                 video_id=video_id,
                 source_file=source_file,
-                start_frame=start,
-                end_frame=end - 1,
+                start_frame=int(frame_indices[start]),
+                end_frame=int(frame_indices[end - 1]),
                 label=y_win,
             )
         )
@@ -374,7 +502,9 @@ def load_all_windows(
     records_all: List[WindowRecord] = []
 
     files = discover_npz_files(data_root)
+    fall_annotations = load_fall_frame_labels(FALL_ANNOTATION_CSV)
     skipped_short = 0
+    skipped_no_valid_windows = 0
 
     for path in files:
         with np.load(path, allow_pickle=True) as d:
@@ -387,7 +517,6 @@ def load_all_windows(
             if "label" in d:
                 label_data = d["label"]
             else:
-                # Fallback to parent directory: .../<label>/<video>.npz
                 label_data = path.parent.name
 
             if "video_id" in d:
@@ -399,6 +528,37 @@ def load_all_windows(
                 video_id = str(raw_video_id)
             else:
                 video_id = path.stem
+
+            num_frames = keypoints.shape[0]
+            if "frame_indices" in d:
+                frame_indices = np.asarray(d["frame_indices"]).reshape(-1)
+            else:
+                # UR-Fall CSV frame numbering is 1-based.
+                frame_indices = np.arange(1, num_frames + 1, dtype=np.int64)
+
+        sequence_name = canonical_sequence_name(video_id)
+        if sequence_name is None:
+            sequence_name = canonical_sequence_name(path.stem)
+
+        # Prefer the UR-Fall sequence name for deciding original video type.
+        # Fall videos are re-labeled per window from the official CSV.
+        if sequence_name is not None:
+            video_level_label = 1 if sequence_name.startswith("fall-") else 0
+        else:
+            video_level_label = normalize_label(label_data)
+
+        sequence_annotations: Optional[Dict[int, int]] = None
+        if video_level_label == 1:
+            if sequence_name is None:
+                raise RuntimeError(
+                    f"Cannot parse UR-Fall sequence name from {video_id} / {path.name}"
+                )
+            sequence_annotations = fall_annotations.get(sequence_name)
+            if sequence_annotations is None:
+                raise RuntimeError(
+                    f"{video_id} -> {sequence_name} has no frame annotations in "
+                    f"{FALL_ANNOTATION_CSV}"
+                )
 
         xy = preprocess_keypoints(
             keypoints=keypoints,
@@ -415,18 +575,23 @@ def load_all_windows(
 
         X_list, y_list, records = make_windows(
             features=features,
-            label_data=label_data,
+            video_level_label=video_level_label,
             video_id=video_id,
             source_file=str(path),
             window_size=window_size,
             stride=stride,
+            frame_indices=frame_indices,
+            sequence_annotations=sequence_annotations,
             valid_mask=valid_mask,
             min_valid_frames=min_valid_frames,
             missing_mode=missing_mode,
         )
 
-        if not X_list:
+        if num_frames < window_size:
             skipped_short += 1
+            continue
+        if not X_list:
+            skipped_no_valid_windows += 1
             continue
 
         X_all.extend(X_list)
@@ -440,14 +605,14 @@ def load_all_windows(
     X = np.stack(X_all).astype(np.float32)
     y = np.asarray(y_all, dtype=np.int64)
     groups = np.asarray(groups_all)
-
     records_df = pd.DataFrame([asdict(r) for r in records_all])
 
     print(
         f"Loaded {len(files)} NPZ videos | "
         f"windows={len(X)} | shape={X.shape} | "
         f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
-        f"short_videos_skipped={skipped_short}"
+        f"short_videos_skipped={skipped_short} | "
+        f"no_valid_windows_skipped={skipped_no_valid_windows}"
     )
 
     return X, y, groups, records_df
@@ -687,14 +852,17 @@ def run_model_cv(
     unique_groups = np.unique(groups)
     n_splits = min(args.folds, len(unique_groups))
 
-    # StratifiedGroupKFold also needs enough groups for both classes.
-    group_labels = []
-    for g in unique_groups:
-        vals = y[groups == g]
-        values, counts = np.unique(vals, return_counts=True)
-        group_labels.append(int(values[np.argmax(counts)]))
-
-    class_group_counts = np.bincount(group_labels, minlength=2)
+    # Stratify by the ORIGINAL video type (adl/fall), not by the majority
+    # of window labels. A fall video can legitimately contain many ADL windows.
+    split_y = video_type_labels(groups)
+    unique_group_types = (
+        pd.DataFrame({"group": groups, "video_type": split_y})
+        .drop_duplicates("group")
+    )
+    class_group_counts = np.bincount(
+        unique_group_types["video_type"].to_numpy(dtype=np.int64),
+        minlength=2,
+    )
     max_valid_splits = int(class_group_counts.min())
 
     if max_valid_splits < 2:
@@ -723,6 +891,9 @@ def run_model_cv(
     metrics_lines.append("MODEL: LSTM")
     metrics_lines.append("=" * 80)
     metrics_lines.append(f"data_root: {args.data_root}")
+    metrics_lines.append(f"annotation_csv: {FALL_ANNOTATION_CSV}")
+    metrics_lines.append("label_level: window")
+    metrics_lines.append("urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1")
     metrics_lines.append(f"feature_mode: {args.feature_mode}")
     metrics_lines.append(f"input_dim: {X.shape[-1]}")
     metrics_lines.append(f"window_size: {args.window_size}")
@@ -743,7 +914,7 @@ def run_model_cv(
     metrics_lines.append("")
 
     for fold, (train_idx, test_idx) in enumerate(
-        splitter.split(X, y, groups=groups),
+        splitter.split(X, split_y, groups=groups),
         start=1,
     ):
         print("\n" + "=" * 72)
@@ -1075,6 +1246,13 @@ def main() -> None:
     for k, v in list(config.items()):
         if isinstance(v, Path):
             config[k] = str(v)
+    config.update(
+        {
+            "annotation_csv": str(FALL_ANNOTATION_CSV),
+            "label_level": "window",
+            "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
+        }
+    )
     (args.experiment_output_dir / "config.json").write_text(
         json.dumps(config, indent=2, ensure_ascii=False),
         encoding="utf-8",

@@ -30,5 +30,8 @@
     256
   ],
   "temporal_kernel_size": 9,
-  "pose_extractor": "BlazePose"
+  "pose_extractor": "BlazePose",
+  "annotation_csv": "data/urfall-cam0-falls.csv",
+  "label_level": "window",
+  "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
 }
