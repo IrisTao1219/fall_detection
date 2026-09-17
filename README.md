@@ -2,16 +2,16 @@
 
 本课程项目用普通摄像头视频完成跌倒（`fall`）与日常活动（`adl`）二分类：先用 MediaPipe BlazePose 提取 33 个人体关键点，再比较不同分类模型对连续姿态的识别能力。研究目标与实验设计见上级目录的[《实验方案》](../实验方案.md)。
 
-当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF 和 LSTM 的结果已保存；MLP 和 ST-GCN 程序已完成，尚待运行。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
+当前实验重点比较使用骨架关键点时，不同分类器对跌倒视频的识别效果。RF、LSTM、MLP 和 ST-GCN 均已完成原始坐标与归一化坐标两组实验。后续实验按[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节的复现路线逐步开展。
 
-**当前进度：**已实现 URFD 图像帧的姿态提取、坐标归一化，并保存 RF 和 LSTM 各两组（原始坐标、归一化坐标）实验结果。MLP 和 ST-GCN 实验程序已写好，尚无运行结果。报告提出的窗口长度和统一预处理对照尚未完成。
+**当前进度：**已实现 URFD 图像帧的姿态提取和坐标归一化，保存了四种分类模型共八组五折实验结果。窗口长度、缺失点处理等单因素对照，以及多个随机种子的重复实验尚未完成。
 
 ## 环境准备
 
 - Python 3.11（`pyproject.toml` 要求 Python ≥3.11，仓库的 `.python-version` 为 3.11）
 - 推荐使用 uv 管理环境；依赖定义见 `pyproject.toml`
 
-在项目根目录执行：
+在项目根目录执行（当前锁文件将 PyTorch 指向 CUDA 12.8 软件包，适用于相应平台；macOS 需要调整 PyTorch 依赖来源）：
 
 ```bash
 uv sync
@@ -83,9 +83,9 @@ uv run python src/experiment_lstm.py --data-root data/keypoints
 uv run python src/experiment_lstm.py --data-root data/keypoints_normalized
 ```
 
-LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。当前脚本使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、1 帧步长、窗口内插值、跳过完全没有检测到人体的窗口、10 层单向 LSTM（隐藏维度 80）和 30 个训练轮次。按视频分组做 5 折评估，每折仅用训练视频拟合标准化参数。**当前目录中的旧指标仍来自修改前的缺失点填零版本**；重新运行上述命令会覆盖同名结果文件。旧目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和每折训练损失历史；模型权重文件不在当前结果目录中。
+LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。保存的两组配置使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、1 帧步长、窗口内插值、跳过完全没有检测到人体的窗口、10 层单向 LSTM（隐藏维度 80）和 30 个训练轮次。按视频分组做 5 折评估，每折仅用训练视频拟合标准化参数。结果目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和 `histories/` 中的训练损失历史；当前仓库没有保存每折模型权重。
 
-### 5. MLP 实验程序（尚未运行）
+### 5. 训练并评估 MLP
 
 `src/experiment_mlp.py` 可作为将连续 30 帧关键点展平后分类的神经网络基线：
 
@@ -93,11 +93,11 @@ LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。当前脚本�
 uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
 ```
 
-原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，与 LSTM 使用相同的结果结构：根目录有 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv`；每折 `.pt` 模型放在 `models/`，每折训练历史 CSV 放在 `histories/`。总体指标同样来自折外窗口预测。
+原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，与 LSTM 使用相同的结果结构：根目录有 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv`；程序将每折 `.pt` 模型写入 `models/`，每折训练历史 CSV 写入 `histories/`。总体指标同样来自折外窗口预测。
 
-尚未发现 `results/mlp/` 或 `results/mlp_normalized/`，所以没有可报告的 MLP 实测指标。
+两组 MLP 结果已保存，具体指标见下表。当前仓库没有保存每折模型权重。
 
-### 6. ST-GCN 实验程序（尚未运行）
+### 6. 训练并评估 ST-GCN
 
 ```bash
 uv run python src/experiment_stgcn.py --data-root data/keypoints
@@ -106,32 +106,38 @@ uv run python src/experiment_stgcn.py --data-root data/keypoints_normalized
 
 ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、1 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，进行空间图卷积和时间卷积。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。
 
-原始和归一化坐标的结果分别保存到 `results/stgcn/` 和 `results/stgcn_normalized/`。与 LSTM 相同，每折模型放在 `models/`，每折训练历史放在 `histories/`，`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。目前没有 ST-GCN 的实测指标。
+原始和归一化坐标的结果分别保存到 `results/stgcn/` 和 `results/stgcn_normalized/`。与 LSTM 相同，程序将每折模型写入 `models/`，每折训练历史写入 `histories/`；`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。当前仓库没有保存每折模型权重。
 
 ## 已完成的实验与结果
 
-下表取自各结果目录的 `metrics.txt`，均为 **5 折折外窗口预测汇总指标**，其中 `fall` 为正类。四组实验都使用 70 段视频、30 帧窗口、1 帧步长和按视频分组的交叉验证；表中 LSTM 数值来自修改前的填零版本，新预处理版本尚未运行。表中数值不是视频级指标。
+下表取自各结果目录的 `metrics.txt`，均为 **5 折折外窗口预测汇总指标**，其中 `fall` 为正类。八组结果都覆盖 70 段视频、8993 个 30 帧窗口，步长为 1 帧，并按视频分组评估。各组保存的配置均采用窗口内插值。表中数值不是视频级指标。
 
 | 模型 | 输入 | 窗口数 | 准确率 | 跌倒精确率 | 跌倒召回率 | 跌倒 F1 | ROC-AUC | 结果目录 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | RF | 原始 `x/y` | 8993 | 0.9158 | 0.8327 | 0.8014 | 0.8168 | 0.9507 | [`results/rf/`](results/rf/) |
 | RF | 归一化 `x/y` | 8993 | 0.8589 | 0.7419 | 0.6090 | 0.6689 | 0.9093 | [`results/rf_normalized/`](results/rf_normalized/) |
-| LSTM | 原始 `x/y` | 9906 | 0.9232 | 0.8667 | 0.7586 | 0.8090 | 0.9238 | [`results/lstm/`](results/lstm/) |
-| LSTM | 归一化 `x/y` | 9906 | 0.8913 | 0.7507 | 0.7384 | 0.7445 | 0.8731 | [`results/lstm_normalized/`](results/lstm_normalized/) |
+| LSTM | 原始 `x/y` | 8993 | 0.9237 | 0.8436 | 0.8276 | 0.8355 | 0.9522 | [`results/lstm/`](results/lstm/) |
+| LSTM | 归一化 `x/y` | 8993 | 0.8621 | 0.7161 | 0.6808 | 0.6980 | 0.8661 | [`results/lstm_normalized/`](results/lstm_normalized/) |
+| MLP | 原始 `x/y` | 8993 | 0.8453 | 0.6440 | 0.7587 | 0.6966 | 0.8736 | [`results/mlp/`](results/mlp/) |
+| MLP | 归一化 `x/y` | 8993 | 0.8602 | 0.7033 | 0.6969 | 0.7001 | 0.8313 | [`results/mlp_normalized/`](results/mlp_normalized/) |
+| ST-GCN | 原始 `x/y` | 8993 | 0.8949 | 0.7458 | 0.8361 | 0.7884 | 0.9475 | [`results/stgcn/`](results/stgcn/) |
+| ST-GCN | 归一化 `x/y` | 8993 | 0.7752 | 0.5179 | 0.5696 | 0.5425 | 0.7395 | [`results/stgcn_normalized/`](results/stgcn_normalized/) |
 
-RF 使用窗口内时间插值，并跳过完全没有检测到人体的窗口；表中的旧 LSTM 结果对缺失坐标填零，保留了更多窗口。因此这批 RF 与旧 LSTM 结果的样本集合不同，模型间差值只能作为初步观察，不能归因于模型架构。当前 LSTM 脚本已对齐这两项预处理规则，重跑后可更新比较。两种输入下，原始坐标实验的 F1 都高于对应的归一化坐标实验，但当前实验不足以判定归一化普遍有害。
+八组结果使用相同的视频与窗口位置；RF 预测文件的 `window_start/window_end` 是从零开始的窗口位置，`start_frame/end_frame` 对应原始帧号。原始坐标下，LSTM 的窗口级 F1 最高（0.8355），ST-GCN 的跌倒召回率最高（0.8361）；归一化坐标下，MLP 的 F1 最高（0.7001）。除 MLP 外，同一模型的原始坐标 F1 高于归一化坐标。当前只有一个随机种子，且各模型训练过程不同，这些差值不宜直接归因于某一种结构或预处理。
 
-现有 NPZ 的 `fall` 或 `adl` 标签来自视频所属目录，程序把它赋给该视频的所有窗口。这适用于视频类别实验，但跌倒视频中尚未发生跌倒的片段也可能被标为 `fall`。因此这四组结果是**初步窗口级基线**，不能当作跌倒事件检出率或实时报警性能。如果要严格比较模型架构的优劣，需要统一窗口筛选、缺失值处理和评价规则。
+ST-GCN 还输出视频级结果：原始坐标 F1 为 0.9667（70 段视频中 68 段分类正确），归一化坐标 F1 为 0.8000（59 段正确）。视频级概率由同一视频的窗口概率平均得到，不能与上表窗口级指标直接比较。
+
+现有 NPZ 的 `fall` 或 `adl` 标签来自视频所属目录，程序把它赋给该视频的所有窗口。这适用于视频类别实验，但跌倒视频中尚未发生跌倒的片段也可能被标为 `fall`。因此这些结果是**视频类别的初步基线**，不能当作跌倒事件检出率或实时报警性能。
 
 ## 后续工作
 
-以下安排依据[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节“面向后续复现的验证方案”和第 5.2 节“展望”。当前以 UR-Fall 的 `fall`、`adl` 目录区分**视频类别**即可；姿态提取和坐标归一化也已完成，无需把它们列为待做实验。已有 RF、LSTM 代码均按视频分组进行五折评估，这一做法应继续保留，避免同一视频的相邻窗口同时进入训练集和测试集。
+以下安排依据[课程报告](../基于人体姿态估计的跌倒检测课程报告.docx)第 4.7 节“面向后续复现的验证方案”和第 5.2 节“展望”。当前以 UR-Fall 的 `fall`、`adl` 目录区分**视频类别**即可；姿态提取和坐标归一化也已完成。现有四种模型均按视频分组进行五折评估，避免同一视频的相邻窗口同时进入训练集和测试集。
 
 | 阶段 | 实验 | 当前状态与下一步 |
 | --- | --- | --- |
-| 1. 分类器基线 | 固定 BlazePose，比较 RF、MLP、LSTM | RF、LSTM 已有原始与归一化坐标结果；运行已完成的 MLP 程序，补齐其两组指标。整理 Accuracy、跌倒 Recall、F1 和混淆矩阵。 |
-| 2. 单因素预处理对照 | 每次只改变归一化、缺失点处理或窗口长度中的一个因素 | 原始与归一化坐标对照已初步完成；LSTM 脚本现已对齐 RF 的窗口内插值和无效窗口过滤，但需要重跑。若要判断插值或窗口长度本身的作用，再在同一模型和评价规则下分别改变这些设置。 |
-| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | ST-GCN 程序已实现，待在完整数据上运行并与基线比较；Transformer 尚未实现。 |
+| 1. 分类器基线 | 固定 BlazePose，比较 RF、MLP、LSTM | 三种模型的原始与归一化坐标结果均已保存；下一步可整理多随机种子重复结果。 |
+| 2. 单因素预处理对照 | 每次只改变归一化、缺失点处理或窗口长度中的一个因素 | 原始与归一化坐标对照已完成单种子实验；缺失点处理和窗口长度对照尚未完成。 |
+| 3. 模型结构扩展 | 增加 ST-GCN **或** Transformer | ST-GCN 两组结果已保存；Transformer 尚未实现。可在统一重复实验后比较模型表现与训练成本。 |
 
 报告还建议每种配置使用多个随机种子，保存训练日志和划分信息，并报告结果的离散程度。现有结果只记录了单个种子，因此多种子重复实验仍待完成。遮挡或关键点噪声测试、跨人员或跨场景验证，以及减少关节点或压缩模型等轻量化实验属于进一步扩展，可在上述三阶段后按时间安排。
 
@@ -145,8 +151,8 @@ src/blazepose.py      # 逐帧姿态提取
 src/normalize_keypoints.py  # 姿态坐标归一化
 src/experiment_rf.py  # 滑动窗口、交叉验证和随机森林训练
 src/experiment_lstm.py  # LSTM 五折实验
-src/experiment_mlp.py   # MLP 五折实验程序，尚无实测结果
-src/experiment_stgcn.py  # ST-GCN 五折实验程序，尚无实测结果
+src/experiment_mlp.py   # MLP 五折实验
+src/experiment_stgcn.py  # ST-GCN 五折实验
 results/              # 已保存的实验配置、指标、预测及部分模型文件
 models/               # 其他已保存模型文件
 ```
