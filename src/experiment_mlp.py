@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from experiment_lstm import (
     choose_device,
     compute_metrics,
+    fmt_metric,
     load_all_windows,
     seed_everything,
 )
@@ -146,6 +147,10 @@ def main():
     run_name = "mlp_normalized" if "normalized" in args.data_root.resolve().name.lower() else "mlp"
     output = args.output_root / run_name
     output.mkdir(parents=True, exist_ok=True)
+    models_dir = output / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    history_dir = output / "histories"
+    history_dir.mkdir(parents=True, exist_ok=True)
 
     x, y, groups, records = load_all_windows(
         args.data_root, args.window_size, args.stride,
@@ -157,7 +162,7 @@ def main():
     if class_groups.min() < args.folds:
         raise ValueError(f"Need at least {args.folds} videos per class; found {class_groups.tolist()}")
     splitter = StratifiedGroupKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
-    predictions, fold_rows, video_rows = [], [], []
+    predictions, fold_rows = [], []
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(x, y, groups), 1):
         if set(groups[train_idx]) & set(groups[test_idx]):
@@ -169,42 +174,80 @@ def main():
         prob = probabilities(model, make_loader(test_x, y[test_idx], args.batch_size, False), device)
         pred = (prob >= 0.5).astype(np.int64)
         metrics = compute_metrics(y[test_idx], pred, prob)
-        fold_rows.append({"fold": fold, "best_epoch": best_epoch, "val_f1": val_f1, **metrics})
+        fold_rows.append({
+            **metrics, "fold": fold,
+            "train_videos": len(set(groups[train_idx])),
+            "test_videos": len(set(groups[test_idx])),
+            "train_windows": len(train_idx),
+            "test_windows": len(test_idx),
+            "best_epoch": best_epoch, "val_f1": val_f1,
+        })
         frame = records.iloc[test_idx].copy()
-        frame["fold"], frame["fall_probability"], frame["y_pred"] = fold, prob, pred
+        frame["y_true"] = y[test_idx]
+        frame["y_pred"] = pred
+        frame["fall_probability"] = prob
         predictions.append(frame)
         torch.save({
+            "model_type": "mlp",
             "state_dict": model.state_dict(), "input_dim": x.shape[1],
             "hidden": args.hidden, "dropout": args.dropout,
             "feature_mean": mean, "feature_std": std,
             "best_epoch": best_epoch,
-        }, output / f"fold_{fold}.pt")
-        pd.DataFrame(history).to_csv(output / f"fold_{fold}_history.csv", index=False)
+            "args": {key: str(value) if isinstance(value, Path) else value
+                     for key, value in vars(args).items()},
+        }, models_dir / f"fold_{fold}.pt")
+        pd.DataFrame(history).to_csv(history_dir / f"fold_{fold}_history.csv", index=False)
         print(f"Fold {fold}: test F1={metrics['f1']:.4f}, recall={metrics['recall']:.4f}; best epoch={best_epoch}")
 
-    window_df = pd.concat(predictions, ignore_index=True)
-    window_df.to_csv(output / "window_predictions.csv", index=False)
-    # One score per video avoids weighting long videos more heavily in the main result.
-    video_df = window_df.groupby("video_id", as_index=False).agg(
-        fold=("fold", "first"), label=("label", "first"),
-        fall_probability=("fall_probability", "mean"), windows=("label", "size"),
-    )
-    video_df["y_pred"] = (video_df["fall_probability"] >= 0.5).astype(int)
-    video_df.to_csv(output / "video_predictions.csv", index=False)
-    for fold, part in video_df.groupby("fold"):
-        video_rows.append({"fold": fold, **compute_metrics(part.label.to_numpy(), part.y_pred.to_numpy(), part.fall_probability.to_numpy())})
-    pd.DataFrame(fold_rows).to_csv(output / "fold_metrics.csv", index=False)
-    pd.DataFrame(video_rows).to_csv(output / "video_fold_metrics.csv", index=False)
+    pred_df = pd.concat(predictions, ignore_index=True)
+    pred_df.to_csv(output / "predictions.csv", index=False)
+    fold_df = pd.DataFrame(fold_rows)
+    fold_df.to_csv(output / "fold_metrics.csv", index=False)
 
-    window_metrics = compute_metrics(window_df.label.to_numpy(), window_df.y_pred.to_numpy(), window_df.fall_probability.to_numpy())
-    video_metrics = compute_metrics(video_df.label.to_numpy(), video_df.y_pred.to_numpy(), video_df.fall_probability.to_numpy())
-    report = classification_report(video_df.label, video_df.y_pred, labels=[0, 1], target_names=["ADL", "Fall"], zero_division=0)
-    summary = {"video": video_metrics, "window": window_metrics, "video_report": report,
-               "video_confusion_matrix": confusion_matrix(video_df.label, video_df.y_pred, labels=[0, 1]).tolist()}
-    (output / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    y_true = pred_df["y_true"].to_numpy()
+    y_pred = pred_df["y_pred"].to_numpy()
+    y_prob = pred_df["fall_probability"].to_numpy()
+    overall = compute_metrics(y_true, y_pred, y_prob)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    pd.DataFrame(cm, index=["true_ADL", "true_Fall"],
+                 columns=["pred_ADL", "pred_Fall"]).to_csv(output / "confusion_matrix.csv")
+    report = classification_report(y_true, y_pred, labels=[0, 1],
+                                   target_names=["ADL", "Fall"], digits=4,
+                                   zero_division=0)
+    lines = ["=" * 80, "MODEL: MLP", "=" * 80,
+             f"data_root: {args.data_root}", "feature_mode: xy66",
+             f"input_dim: {x.shape[1]}", f"window_size: {args.window_size}",
+             f"stride: {args.stride}", f"missing_mode: {args.missing_mode}",
+             "min_valid_frames: 1", f"visibility_threshold: {args.visibility_threshold}",
+             f"hidden: {args.hidden}", f"dropout: {args.dropout}",
+             f"epochs: {args.epochs}", f"patience: {args.patience}",
+             f"batch_size: {args.batch_size}", f"learning_rate: {args.learning_rate}",
+             f"weight_decay: {args.weight_decay}", f"folds: {args.folds}",
+             f"seed: {args.seed}", f"device: {device}", ""]
+    metric_keys = ("accuracy", "precision", "recall", "f1", "roc_auc", "tn", "fp", "fn", "tp")
+    for row in fold_rows:
+        fold = row["fold"]
+        lines.extend([f"[Fold {fold}/{args.folds}]",
+                      f"train_videos: {row['train_videos']}",
+                      f"test_videos: {row['test_videos']}",
+                      f"train_windows: {row['train_windows']}",
+                      f"test_windows: {row['test_windows']}",
+                      f"best_epoch: {row['best_epoch']}",
+                      f"val_f1: {fmt_metric(row['val_f1'])}"])
+        lines.extend(f"{key}: {fmt_metric(row[key])}" for key in metric_keys)
+        lines.append("")
+    lines.extend(["=" * 80, "OVERALL OUT-OF-FOLD METRICS", "=" * 80])
+    lines.extend(f"{key}: {fmt_metric(overall[key])}" for key in metric_keys)
+    lines.extend(["", "Classification report:", report,
+                  "Confusion matrix [[TN, FP], [FN, TP]]:", np.array2string(cm),
+                  "", "Fold mean ± std:"])
+    for key in ("accuracy", "precision", "recall", "f1", "roc_auc"):
+        lines.append(f"{key}: {fold_df[key].mean():.6f} ± {fold_df[key].std(ddof=1):.6f}")
+    (output / "metrics.txt").write_text("\n".join(lines), encoding="utf-8")
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
+    config["experiment_output_dir"] = str(output)
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print(f"Video-level F1={video_metrics['f1']:.4f}, recall={video_metrics['recall']:.4f}")
+    print(f"Overall F1={overall['f1']:.4f}, recall={overall['recall']:.4f}")
     print(f"Results: {output}")
 
 
