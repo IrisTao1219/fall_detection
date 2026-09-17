@@ -83,7 +83,7 @@ uv run python src/experiment_lstm.py --data-root data/keypoints
 uv run python src/experiment_lstm.py --data-root data/keypoints_normalized
 ```
 
-旧实验结果保存在 `results/lstm/` 和 `results/lstm_normalized/`。它们使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、1 帧步长、缺失坐标填零、10 层单向 LSTM（隐藏维度 80）、30 个训练轮次。按视频分组做 5 折评估，每折仅用训练视频拟合标准化参数。当前脚本已改为与 RF 一致的窗口内插值，并跳过完全没有检测到人体的窗口；**上述旧指标不会自动更新**。重新运行时，新结果分别写入 `results/lstm_rf_preprocess/` 和 `results/lstm_normalized_rf_preprocess/`，不会覆盖旧结果。旧目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和每折训练损失历史；模型权重文件不在当前结果目录中。
+LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。当前脚本使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、1 帧步长、窗口内插值、跳过完全没有检测到人体的窗口、10 层单向 LSTM（隐藏维度 80）和 30 个训练轮次。按视频分组做 5 折评估，每折仅用训练视频拟合标准化参数。**当前目录中的旧指标仍来自修改前的缺失点填零版本**；重新运行上述命令会覆盖同名结果文件。旧目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和每折训练损失历史；模型权重文件不在当前结果目录中。
 
 ### 5. MLP 实验程序（尚未运行）
 
@@ -93,7 +93,7 @@ uv run python src/experiment_lstm.py --data-root data/keypoints_normalized
 uv run python src/experiment_mlp.py --data-root data/keypoints_normalized
 ```
 
-原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`：每折 `.pt` 模型放在 `models/`，训练历史、预测和分折指标等 CSV 放在 `historys/`，配置与总体指标 JSON 放在结果目录根部。视频级结果按同一视频各窗口的跌倒概率平均后计算。
+原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，与 LSTM 使用相同的结果结构：根目录有 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv`；每折 `.pt` 模型放在 `models/`，每折训练历史 CSV 放在 `histories/`。总体指标同样来自折外窗口预测。
 
 尚未发现 `results/mlp/` 或 `results/mlp_normalized/`，所以没有可报告的 MLP 实测指标。
 

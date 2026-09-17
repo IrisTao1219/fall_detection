@@ -1029,7 +1029,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def dataset_run_name(data_root: Path) -> str:
-    """Keep RF-aligned reruns separate from the previously saved LSTM results."""
+    """Map raw and normalized inputs to the standard LSTM result folders."""
     name = data_root.resolve().name.lower()
     return "lstm_normalized" if "normalized" in name else "lstm"
 
