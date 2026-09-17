@@ -13,5 +13,25 @@
   "weight_decay": 0.0001,
   "folds": 5,
   "seed": 42,
-  "device": "auto"
+  "device": "auto",
+  "experiment_output_dir": "results/stgcn",
+  "model_type": "stgcn",
+  "feature_mode": "xy66",
+  "channels": [
+    64,
+    64,
+    64,
+    64,
+    128,
+    128,
+    128,
+    256,
+    256,
+    256
+  ],
+  "temporal_kernel_size": 9,
+  "pose_extractor": "BlazePose",
+  "annotation_csv": "data/urfall-cam0-falls.csv",
+  "label_level": "window",
+  "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
 }

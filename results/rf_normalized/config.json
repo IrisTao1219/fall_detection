@@ -1,6 +1,8 @@
 {
     "experiment_name": "rf_normalized",
     "data_root": "data/keypoints_normalized",
+    "fall_annotation_csv": "data/urfall-cam0-falls.csv",
+    "window_label_strategy": "UR-Fall frame labels: ignore 0, majority vote -1 vs 1",
     "result_dir": "results/rf_normalized",
     "normalized_input": true,
     "coordinate_field": "keypoints",
@@ -16,7 +18,7 @@
     "window_stride": 1,
     "missing_value_strategy": "interpolate",
     "number_of_videos": 70,
-    "number_of_windows": 8993,
+    "number_of_windows": 8963,
     "feature_dimension": 1980,
     "folds": 5,
     "random_state": 42,

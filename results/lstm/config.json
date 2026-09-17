@@ -19,5 +19,8 @@
   "folds": 5,
   "seed": 42,
   "device": "auto",
-  "experiment_output_dir": "results/lstm"
+  "experiment_output_dir": "results/lstm",
+  "annotation_csv": "data/urfall-cam0-falls.csv",
+  "label_level": "window",
+  "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
 }
