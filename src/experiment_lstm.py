@@ -13,7 +13,8 @@ Default experiment:
 - feature: all BlazePose x/y coordinates -> 33 * 2 = 66 dims per frame
 - window length: 30 frames
 - stride: 1 frame
-- missing joint handling: [0, 0] (paper setting)
+- missing joint handling: interpolate within each window (matching RF)
+- discard windows with no detected pose frames (matching RF)
 - LSTM: 10 recurrent layers, 80 hidden units
 - BatchNorm after input and recurrent outputs
 - video-grouped 5-fold CV to prevent windows from the same video leaking
@@ -182,8 +183,9 @@ def preprocess_keypoints(
       - visibility exists and is below threshold
 
     missing_mode:
-      zero   -> paper-style unidentified joints become [0, 0]
-      interp -> temporal interpolation per joint coordinate
+      mask   -> leave missing coordinates as NaN for window-level processing
+      zero   -> unidentified joints become [0, 0]
+      interp -> temporal interpolation over the full video (legacy behavior)
     """
     if keypoints.ndim != 3 or keypoints.shape[1] != 33 or keypoints.shape[2] < 2:
         raise ValueError(
@@ -209,7 +211,9 @@ def preprocess_keypoints(
 
     xy[~joint_valid] = np.nan
 
-    if missing_mode == "zero":
+    if missing_mode == "mask":
+        pass
+    elif missing_mode == "zero":
         xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
 
     elif missing_mode == "interp":
@@ -281,6 +285,9 @@ def make_windows(
     source_file: str,
     window_size: int,
     stride: int,
+    valid_mask: Optional[np.ndarray] = None,
+    min_valid_frames: int = 1,
+    missing_mode: str = "interp",
 ) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
     T = features.shape[0]
 
@@ -304,7 +311,16 @@ def make_windows(
 
     for start in range(0, T - window_size + 1, stride):
         end = start + window_size
-        x_win = features[start:end]
+        if valid_mask is not None and int(np.count_nonzero(valid_mask[start:end])) < min_valid_frames:
+            continue
+        x_win = features[start:end].copy()
+        if missing_mode == "interp":
+            for feature_idx in range(x_win.shape[1]):
+                x_win[:, feature_idx] = interpolate_1d(x_win[:, feature_idx])
+        elif missing_mode == "zero":
+            x_win = np.nan_to_num(x_win, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            raise ValueError(f"Unknown missing_mode: {missing_mode}")
 
         if frame_labels is not None:
             values, counts = np.unique(frame_labels[start:end], return_counts=True)
@@ -350,6 +366,7 @@ def load_all_windows(
     missing_mode: str,
     feature_mode: str,
     joint_indices: Optional[Sequence[int]],
+    min_valid_frames: int = 1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     X_all: List[np.ndarray] = []
     y_all: List[int] = []
@@ -387,7 +404,7 @@ def load_all_windows(
             keypoints=keypoints,
             valid_mask=valid_mask,
             visibility_threshold=visibility_threshold,
-            missing_mode=missing_mode,
+            missing_mode="mask",
         )
 
         features = build_frame_features(
@@ -403,6 +420,9 @@ def load_all_windows(
             source_file=str(path),
             window_size=window_size,
             stride=stride,
+            valid_mask=valid_mask,
+            min_valid_frames=min_valid_frames,
+            missing_mode=missing_mode,
         )
 
         if not X_list:
@@ -708,6 +728,7 @@ def run_model_cv(
     metrics_lines.append(f"window_size: {args.window_size}")
     metrics_lines.append(f"stride: {args.stride}")
     metrics_lines.append(f"missing_mode: {args.missing_mode}")
+    metrics_lines.append(f"min_valid_frames: {args.min_valid_frames}")
     metrics_lines.append(f"visibility_threshold: {args.visibility_threshold}")
     metrics_lines.append(f"hidden_size: {args.hidden_size}")
     metrics_lines.append(f"num_layers: {args.num_layers}")
@@ -956,7 +977,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Base output directory. A dataset-specific subdirectory is "
             "created automatically from --data-root, e.g. "
-            "results/lstm_normalized/."
+            "results/lstm_normalized_rf_preprocess/."
         ),
     )
     p.add_argument(
@@ -978,9 +999,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--missing-mode",
         choices=["zero", "interp"],
-        default="zero",
-        help="zero follows paper's [0,0] missing-joint rule; interp matches prior preprocessing style.",
+        default="interp",
+        help="interp fills missing joints within each window like RF; zero fills them with 0.",
     )
+    p.add_argument("--min-valid-frames", type=int, default=1,
+                   help="Minimum detected-pose frames required per window (RF default: 1).")
     p.add_argument("--visibility-threshold", type=float, default=0.3)
 
     p.add_argument("--hidden-size", type=int, default=80)
@@ -1006,9 +1029,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def dataset_run_name(data_root: Path) -> str:
-    """Map raw / normalized keypoint datasets to flat LSTM result folders."""
+    """Keep RF-aligned reruns separate from the previously saved LSTM results."""
     name = data_root.resolve().name.lower()
-    return "lstm_normalized" if "normalized" in name else "lstm"
+    return "lstm_normalized_rf_preprocess" if "normalized" in name else "lstm_rf_preprocess"
 
 
 def main() -> None:
@@ -1016,6 +1039,8 @@ def main() -> None:
     args = parser.parse_args()
 
     args.joint_indices = parse_joint_indices(args.joint_indices)
+    if args.min_valid_frames < 0 or args.min_valid_frames > args.window_size:
+        parser.error("--min-valid-frames must be between 0 and --window-size")
 
     # One run = one data root. Store each dataset in its own output folder,
     # so raw and normalized experiments are kept completely separate.
@@ -1042,6 +1067,7 @@ def main() -> None:
         missing_mode=args.missing_mode,
         feature_mode=args.feature_mode,
         joint_indices=args.joint_indices,
+        min_valid_frames=args.min_valid_frames,
     )
 
     # Save experiment configuration.
