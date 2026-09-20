@@ -1,10 +1,13 @@
 import numpy as np
 
-data = np.load("data/keypoints_normalized/fall/fall-01-cam0-rgb.npz")
+data = np.load("data/keypoints/fall/fall-01-cam0-rgb.npz")
 
 print(data.files)
 
-print(data["keypoints"])
+keypoints = data["keypoints"]
+print("shape: " + str(keypoints.shape))
+print("dimensions: " + str(keypoints.ndim))
+print(keypoints)
 # print(data["valid_mask"])
 # print(data["frame_indices"])
 # print(data["timestamps"])

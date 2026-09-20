@@ -193,7 +193,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--result-root",
+        "--output-root",
         type=Path,
         default=Path("results"),
         help="结果根目录，默认 results",
@@ -218,7 +218,7 @@ def configure_experiment(args):
     global EXPERIMENT_NAME
 
     DATA_ROOT = args.data_root
-    RESULT_ROOT = args.result_root
+    RESULT_ROOT = args.output_root
 
     dataset_name = DATA_ROOT.resolve().name.lower()
 
