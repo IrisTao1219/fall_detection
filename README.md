@@ -61,7 +61,7 @@ uv run python src/blazepose.py
 uv run python src/normalize_keypoints.py
 ```
 
-脚本读取 `data/keypoints/`，将髋部中心作为坐标原点、肩宽作为优先尺度，输出同结构文件至 `data/keypoints_normalized/`。无法可靠归一化的帧会标记为无效。
+脚本读取 data/keypoints/，以每帧髋部中心作为坐标原点，并使用整段视频中可靠肩宽的稳健统计值作为统一尺度进行归一化，从而减少逐帧尺度波动带来的时序噪声。归一化过程保持原有有效帧和关键点结构，不额外根据普通关键点 visibility 制造缺失值。
 
 ### 3. 训练并评估随机森林
 
@@ -114,20 +114,20 @@ ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、3
 
 本次改动是**标签的计算单位**。旧实验按视频所属的 `fall` 或 `adl` 目录取一个标签，再赋给该视频的全部滑动窗口；这会把跌倒视频中跌倒发生前的正常活动也标成 `fall`。新实验对 `fall` 视频读取 [`data/urfall-cam0-falls.csv`](data/urfall-cam0-falls.csv) 的前三列（视频名、帧号、姿态标签），按每个 30 帧窗口实际覆盖的帧号取标注。CSV 中 `-1` 表示非躺倒、`0` 表示跌倒过渡、`1` 表示躺倒；计算窗口标签时忽略 `0`，在余下的 `-1` 与 `1` 中按多数票分别记为 `adl=0` 或 `fall=1`。有效标签为空或票数持平的窗口被跳过；`adl` 视频的窗口均标为 0。**因此这里的正类依照 CSV 对“躺倒”的标注，不等同于把跌倒过渡阶段也算作正类。**
 
-下面取自 `results/` 各目录的 `metrics.txt`，是按视频分组的 5 折**折外窗口预测汇总指标**，并非视频级或事件级指标。八组结果各有 8963 个窗口，其中 883 个为正类；MLP 和 ST-GCN 的窗口位置与真实标签均已分别同对应的 LSTM 结果逐项核对一致。ST-GCN 的当前结果已使用修正后的原始帧号映射。
+下面取自 `results/` 与 `results_normalized/` 各目录的 `metrics.txt`，是按视频分组的 5 折**折外窗口预测汇总指标**，并非视频级或事件级指标。八组结果各有 8963 个窗口，其中 883 个为正类；MLP 和 ST-GCN 的窗口位置与真实标签均已分别同对应的 LSTM 结果逐项核对一致。ST-GCN 的当前结果已使用修正后的原始帧号映射。
 
 | 模型 | 输入 | 窗口数 | 准确率 | 跌倒精确率 | 跌倒召回率 | 跌倒 F1 | ROC-AUC | 结果目录 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | RF | 原始 `x/y` | 8963 | 0.9709 | 0.8494 | 0.8562 | 0.8528 | 0.9891 | [`results/rf/`](results/rf/) |
-| RF | 归一化 `x/y` | 8963 | 0.9496 | 0.8372 | 0.6059 | 0.7030 | 0.9512 | [`results/rf_normalized/`](results/rf_normalized/) |
+| RF | 归一化 `x/y` | 8963 | 0.9487 | 0.8395 | 0.5923 | 0.6946 | 0.9660 | [`results_normalized/rf/rf_normalized/`](results_normalized/rf/rf_normalized/) |
 | LSTM | 原始 `x/y` | 8963 | 0.9776 | 0.9231 | 0.8426 | 0.8810 | 0.9633 | [`results/lstm/`](results/lstm/) |
-| LSTM | 归一化 `x/y` | 8963 | 0.9271 | 0.6108 | 0.7180 | 0.6601 | 0.8867 | [`results/lstm_normalized/`](results/lstm_normalized/) |
+| LSTM | 归一化 `x/y` | 8963 | 0.9445 | 0.7265 | 0.7010 | 0.7135 | 0.8900 | [`results_normalized/lstm/lstm_normalized/`](results_normalized/lstm/lstm_normalized/) |
 | MLP | 原始 `x/y` | 8963 | 0.9530 | 0.7077 | 0.8913 | 0.7890 | 0.9763 | [`results/mlp/`](results/mlp/) |
-| MLP | 归一化 `x/y` | 8963 | 0.9327 | 0.6282 | 0.7769 | 0.6947 | 0.8783 | [`results/mlp_normalized/`](results/mlp_normalized/) |
+| MLP | 归一化 `x/y` | 8963 | 0.9279 | 0.6167 | 0.7089 | 0.6596 | 0.8781 | [`results_normalized/mlp/mlp_normalized/`](results_normalized/mlp/mlp_normalized/) |
 | ST-GCN（十层） | 原始 `x/y` | 8963 | 0.9861 | 0.9084 | 0.9547 | 0.9310 | 0.9976 | [`results/stgcn/`](results/stgcn/) |
-| ST-GCN（十层） | 归一化 `x/y` | 8963 | 0.8891 | 0.4532 | 0.6093 | 0.5198 | 0.8803 | [`results/stgcn_normalized/`](results/stgcn_normalized/) |
+| ST-GCN（十层） | 归一化 `x/y` | 8963 | 0.9342 | 0.6570 | 0.6942 | 0.6751 | 0.9571 | [`results_normalized/stgcn/stgcn_normalized/`](results_normalized/stgcn/stgcn_normalized/) |
 
-在原始坐标的四种模型中，ST-GCN 的窗口级 F1 最高（0.9310），跌倒召回率也最高（0.9547）。归一化坐标下，RF 的 F1 最高（0.7030）。
+在原始坐标的四种模型中，ST-GCN 的窗口级 F1 最高（0.9310），跌倒召回率也最高（0.9547）。归一化坐标下，LSTM 的 F1 最高（0.7135）。
 
 ### 旧结果：整段视频共用一个标签
 
@@ -170,7 +170,8 @@ src/experiments/rf.py  # 滑动窗口、交叉验证和随机森林训练
 src/experiments/lstm.py  # LSTM 五折实验
 src/experiments/mlp.py   # MLP 五折实验
 src/experiments/stgcn.py  # 十层 ST-GCN 五折实验
-results/              # CSV 逐窗口标签结果
+results/              # CSV 逐窗口标签结果（原始坐标为主）
+results_normalized/   # 新保存的归一化坐标实验结果
 results-old/          # 保留的旧视频级标签结果
 models/               # 其他已保存模型文件
 ```
