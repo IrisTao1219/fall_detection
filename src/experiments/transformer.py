@@ -297,7 +297,7 @@ class TemporalTransformer(nn.Module):
             dropout=dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=False,
+            norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(
             encoder_layer,
@@ -524,6 +524,48 @@ def fit_scaler(
     return offset.astype(np.float32), scale.astype(np.float32)
 
 
+def tune_threshold(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    objective: str,
+    min_recall: float,
+) -> tuple[float, dict[str, float]]:
+    """Choose a validation threshold instead of assuming 0.5 is calibrated."""
+    candidates = np.unique(np.r_[0.05, np.linspace(0.1, 0.9, 81), 0.95, y_prob])
+    best_threshold = 0.5
+    best_metrics = compute_metrics(y_true, (y_prob >= 0.5).astype(np.int64), y_prob)
+    best_score = -float("inf")
+
+    for threshold in candidates:
+        pred = (y_prob >= threshold).astype(np.int64)
+        metrics = compute_metrics(y_true, pred, y_prob)
+        if metrics["recall"] + 1e-12 < min_recall:
+            continue
+        score = metrics[objective]
+        # Prefer the higher threshold on ties; it usually reduces false positives.
+        if score > best_score or (
+            score == best_score and threshold > best_threshold
+        ):
+            best_score = score
+            best_threshold = float(threshold)
+            best_metrics = metrics
+
+    if best_score == -float("inf"):
+        # If the recall constraint is infeasible, fall back to the requested metric.
+        for threshold in candidates:
+            pred = (y_prob >= threshold).astype(np.int64)
+            metrics = compute_metrics(y_true, pred, y_prob)
+            score = metrics[objective]
+            if score > best_score or (
+                score == best_score and threshold > best_threshold
+            ):
+                best_score = score
+                best_threshold = float(threshold)
+                best_metrics = metrics
+
+    return best_threshold, best_metrics
+
+
 def train_fold(x, y, groups, args, device, seed):
     fit_idx, val_idx = urfall_inner_split(y, groups, seed)
     offset, scale = fit_scaler(x, fit_idx, args.normalization)
@@ -553,7 +595,8 @@ def train_fold(x, y, groups, args, device, seed):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=max(2, args.patience // 3)
     )
-    best_f1, best_loss, best_epoch, best_state = -1.0, float("inf"), 0, None
+    best_score, best_loss, best_epoch, best_state = -1.0, float("inf"), 0, None
+    best_threshold, best_val_metrics = args.threshold, {}
     history = []
     started = time.perf_counter()
 
@@ -570,19 +613,24 @@ def train_fold(x, y, groups, args, device, seed):
             loss_sum += loss.item() * len(yb)
         train_loss = loss_sum / len(fit_idx)
         val_prob = probabilities(model, val_loader, device)
-        val_pred = (val_prob >= args.threshold).astype(np.int64)
-        val_f1 = compute_metrics(y[val_idx], val_pred, val_prob)["f1"]
-        scheduler.step(val_f1)
+        val_threshold, val_metrics = tune_threshold(
+            y[val_idx], val_prob, args.metric_objective, args.min_recall
+        )
+        val_score = val_metrics[args.metric_objective]
+        scheduler.step(val_score)
         history.append(
             {
                 "epoch": epoch,
                 "train_loss": train_loss,
-                "val_f1": val_f1,
+                "val_threshold": val_threshold,
+                **{f"val_{key}": value for key, value in val_metrics.items()},
                 "learning_rate": optimizer.param_groups[0]["lr"],
             }
         )
-        if val_f1 > best_f1 or (val_f1 == best_f1 and train_loss < best_loss):
-            best_f1, best_loss, best_epoch = val_f1, train_loss, epoch
+        if val_score > best_score or (val_score == best_score and train_loss < best_loss):
+            best_score, best_loss, best_epoch = val_score, train_loss, epoch
+            best_threshold = val_threshold
+            best_val_metrics = val_metrics
             best_state = {
                 key: value.detach().cpu().clone() for key, value in model.state_dict().items()
             }
@@ -597,7 +645,9 @@ def train_fold(x, y, groups, args, device, seed):
         offset,
         scale,
         best_epoch,
-        best_f1,
+        best_score,
+        best_threshold,
+        best_val_metrics,
         history,
         (fit_idx, val_idx),
         time.perf_counter() - started,
@@ -617,6 +667,33 @@ def _json_args(args) -> dict:
         key: str(value) if isinstance(value, Path) else value
         for key, value in vars(args).items()
     }
+
+
+def aggregate_video_predictions(seed_frame: pd.DataFrame, mode: str, topk: int) -> pd.DataFrame:
+    rows = []
+    for video_id, group in seed_frame.groupby("video_id", sort=False):
+        probabilities_for_video = group["fall_probability"].to_numpy()
+        if mode == "mean":
+            video_probability = float(probabilities_for_video.mean())
+        elif mode == "max":
+            video_probability = float(probabilities_for_video.max())
+        elif mode == "topk_mean":
+            k = min(topk, len(probabilities_for_video))
+            video_probability = float(np.sort(probabilities_for_video)[-k:].mean())
+        else:
+            raise ValueError(f"Unknown video aggregation: {mode}")
+        rows.append(
+            {
+                "video_id": video_id,
+                "seed": int(group["seed"].iloc[0]),
+                "fold": int(group["fold"].iloc[0]),
+                "label": video_type_label(video_id),
+                "fall_probability": video_probability,
+                "threshold": float(group["threshold"].iloc[0]),
+                "windows": int(len(group)),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def parse_args():
@@ -642,12 +719,12 @@ def parse_args():
     parser.add_argument("--confidence-index", type=int, default=None)
     parser.add_argument("--feature-mode", choices=("xy", "xyc"), default="xy")
     parser.add_argument(
-        "--normalization", choices=("minmax", "zscore", "none"), default="none"
+        "--normalization", choices=("minmax", "zscore", "none"), default="zscore"
     )
-    parser.add_argument("--d-model", type=int, default=512)
-    parser.add_argument("--heads", type=int, default=8)
+    parser.add_argument("--d-model", type=int, default=128)
+    parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--feedforward-dim", type=int, default=2048)
+    parser.add_argument("--feedforward-dim", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=12)
@@ -656,6 +733,24 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--gradient-clip", type=float, default=1.0)
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--metric-objective",
+        choices=("accuracy", "f1", "precision", "recall"),
+        default="accuracy",
+        help="Validation metric used for early stopping and threshold tuning.",
+    )
+    parser.add_argument(
+        "--min-recall",
+        type=float,
+        default=0.70,
+        help="Minimum validation recall required during threshold tuning.",
+    )
+    parser.add_argument(
+        "--video-aggregation",
+        choices=("mean", "max", "topk_mean"),
+        default="topk_mean",
+    )
+    parser.add_argument("--video-topk", type=int, default=5)
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--seeds", type=int, nargs="+", default=[42])
@@ -683,6 +778,10 @@ def main():
         raise ValueError("At least one training seed is required")
     if args.d_model % args.heads:
         raise ValueError("d-model must be divisible by heads")
+    if not 0.0 <= args.min_recall <= 1.0:
+        raise ValueError("min-recall must be between 0 and 1")
+    if args.video_topk < 1:
+        raise ValueError("video-topk must be positive")
 
     device = choose_device(args.device)
     seed_everything(args.split_seed)
@@ -732,7 +831,18 @@ def main():
         history_dir.mkdir(parents=True, exist_ok=True)
         seed_predictions = []
         for fold, (train_idx, test_idx) in enumerate(split_indices, 1):
-            model, offset, scale, best_epoch, val_f1, history, _, seconds = train_fold(
+            (
+                model,
+                offset,
+                scale,
+                best_epoch,
+                val_score,
+                tuned_threshold,
+                best_val_metrics,
+                history,
+                _,
+                seconds,
+            ) = train_fold(
                 x[train_idx],
                 y[train_idx],
                 groups[train_idx],
@@ -744,14 +854,16 @@ def main():
             test_x = ((x[test_idx] - offset) / scale).astype(np.float32)
             test_loader = make_loader(test_x, y[test_idx], args.batch_size, False)
             prob = probabilities(model, test_loader, device)
-            pred = (prob >= args.threshold).astype(np.int64)
+            pred = (prob >= tuned_threshold).astype(np.int64)
             metrics = compute_metrics(y[test_idx], pred, prob)
             all_fold_rows.append(
                 {
                     "seed": seed,
                     "fold": fold,
                     "best_epoch": best_epoch,
-                    "val_f1": val_f1,
+                    "val_threshold": tuned_threshold,
+                    f"val_{args.metric_objective}": val_score,
+                    **{f"best_val_{key}": value for key, value in best_val_metrics.items()},
                     "train_seconds": seconds,
                     **metrics,
                 }
@@ -760,6 +872,7 @@ def main():
             frame["seed"] = seed
             frame["fold"] = fold
             frame["fall_probability"] = prob
+            frame["threshold"] = tuned_threshold
             frame["y_pred"] = pred
             seed_predictions.append(frame)
             pd.DataFrame(history).to_csv(
@@ -777,27 +890,25 @@ def main():
                     "joint_count": joint_count,
                     "parameter_count": parameter_count,
                     "best_epoch": best_epoch,
+                    "threshold": tuned_threshold,
                     "args": _json_args(args),
                 },
                 model_dir / f"fold_{fold}.pt",
             )
             print(
                 f"Seed {seed} fold {fold}: F1={metrics['f1']:.4f}, "
-                f"recall={metrics['recall']:.4f}, best_epoch={best_epoch}"
+                f"accuracy={metrics['accuracy']:.4f}, recall={metrics['recall']:.4f}, "
+                f"threshold={tuned_threshold:.3f}, best_epoch={best_epoch}"
             )
 
         seed_frame = pd.concat(seed_predictions, ignore_index=True)
         seed_frame.to_csv(seed_dir / "predictions.csv", index=False)
         all_predictions.append(seed_frame)
-        video_frame = seed_frame.groupby("video_id", as_index=False).agg(
-            seed=("seed", "first"),
-            fold=("fold", "first"),
-            label=("label", "first"),
-            fall_probability=("fall_probability", "mean"),
-            windows=("label", "size"),
+        video_frame = aggregate_video_predictions(
+            seed_frame, args.video_aggregation, args.video_topk
         )
         video_frame["y_pred"] = (
-            video_frame["fall_probability"] >= args.threshold
+            video_frame["fall_probability"] >= video_frame["threshold"]
         ).astype(int)
         video_frame.to_csv(seed_dir / "video_predictions.csv", index=False)
         all_video_predictions.append(video_frame)
