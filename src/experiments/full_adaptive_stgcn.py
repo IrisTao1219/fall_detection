@@ -717,6 +717,92 @@ def make_adjacency() -> torch.Tensor:
     return torch.from_numpy(adjacency)
 
 
+# Joints that are especially informative for fall detection:
+# shoulders, hips, knees and ankles.
+FALL_AWARE_JOINTS = (11, 12, 23, 24, 25, 26, 27, 28)
+
+
+def make_fall_prior() -> torch.Tensor:
+    """
+    Build a weak fall-aware prior over major body joints.
+
+    This does NOT replace the physical BlazePose skeleton. It only provides
+    an additional soft prior that connects body parts whose relative geometry
+    is highly informative during a fall (shoulders/hips/knees/ankles).
+    """
+    prior = np.zeros((33, 33), dtype=np.float32)
+
+    # Symmetric long-range relations useful for body orientation / collapse.
+    fall_edges = (
+        (11, 23), (12, 24),      # shoulder <-> hip
+        (11, 24), (12, 23),      # cross torso
+        (23, 25), (24, 26),      # hip <-> knee
+        (25, 27), (26, 28),      # knee <-> ankle
+        (11, 27), (12, 28),      # shoulder <-> ankle
+        (23, 27), (24, 28),      # hip <-> ankle
+        (11, 12), (23, 24),      # left/right torso width
+        (25, 26), (27, 28),      # left/right lower-body width
+    )
+    for a, b in fall_edges:
+        prior[a, b] = prior[b, a] = 1.0
+
+    # Normalize the prior independently so its scale is controlled.
+    degree = prior.sum(axis=1)
+    nonzero = degree > 0
+    denom = np.sqrt(np.outer(np.maximum(degree, 1.0), np.maximum(degree, 1.0)))
+    prior = prior / denom
+    prior[~np.isfinite(prior)] = 0.0
+    return torch.from_numpy(prior)
+
+
+class FallAwareAdaptiveGraph(nn.Module):
+    """
+    A lightweight fall-aware adaptive adjacency module.
+
+    Effective adjacency:
+        A_eff = A_physical
+              + alpha * A_fall_prior
+              + beta  * tanh(A_learnable)
+
+    - A_physical: fixed BlazePose skeleton.
+    - A_fall_prior: weak human-designed prior for fall-relevant long-range joints.
+    - A_learnable: fully learnable residual graph initialized at zero.
+
+    alpha and beta are learned scalar gates, so training can decide how much
+    to trust the fall prior and learned non-physical relations.
+    """
+
+    def __init__(self, physical_adjacency: torch.Tensor):
+        super().__init__()
+        self.register_buffer("physical_adjacency", physical_adjacency.clone())
+        self.register_buffer("fall_prior", make_fall_prior())
+
+        # Zero init preserves the original ST-GCN at the beginning of training.
+        self.learnable_residual = nn.Parameter(torch.zeros(33, 33))
+
+        # Start conservatively: physical graph dominates initially.
+        self.alpha = nn.Parameter(torch.tensor(0.10, dtype=torch.float32))
+        self.beta = nn.Parameter(torch.tensor(0.10, dtype=torch.float32))
+
+    def forward(self) -> torch.Tensor:
+        # Force symmetry because the physical skeleton graph is undirected.
+        residual = 0.5 * (self.learnable_residual + self.learnable_residual.T)
+        residual = torch.tanh(residual)
+
+        adjacency = (
+            self.physical_adjacency
+            + self.alpha * self.fall_prior
+            + self.beta * residual
+        )
+
+        # Stable symmetric normalization after adaptation.
+        adjacency = 0.5 * (adjacency + adjacency.T)
+        degree = adjacency.abs().sum(dim=1).clamp_min(1e-6)
+        norm = torch.rsqrt(degree)
+        adjacency = norm[:, None] * adjacency * norm[None, :]
+        return adjacency
+
+
 class STGCNBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, stride: int, dropout: float):
         super().__init__()
@@ -745,7 +831,9 @@ class STGCNBlock(nn.Module):
 class STGCN(nn.Module):
     def __init__(self, dropout: float = 0.3):
         super().__init__()
-        self.register_buffer("adjacency", make_adjacency())
+        physical_adjacency = make_adjacency()
+        self.adaptive_graph = FallAwareAdaptiveGraph(physical_adjacency)
+
         blocks = []
         in_channels = 2
         for layer, out_channels in enumerate(STGCN_CHANNELS):
@@ -759,8 +847,12 @@ class STGCN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Loader supplies [B,T,66]; graph layers use [B,C,T,V].
         x = x.reshape(x.shape[0], x.shape[1], 33, 2).permute(0, 3, 1, 2)
+
+        # One adaptive graph is learned jointly with the classifier.
+        adjacency = self.adaptive_graph()
         for block in self.blocks:
-            x = block(x, self.adjacency)
+            x = block(x, adjacency)
+
         # Keep logits for CrossEntropyLoss. Prediction uses Softmax in probabilities().
         return self.classifier(x.mean(dim=(2, 3)))
 
@@ -839,7 +931,7 @@ def parse_args():
 def dataset_run_name(data_root: Path) -> str:
     """Keep raw/normalized output folders consistent with the sequence baseline experiment."""
     name = data_root.resolve().name.lower()
-    return "stgcn_normalized" if "normalized" in name else "stgcn"
+    return "fall_adaptive_stgcn_normalized" if "normalized" in name else "fall_adaptive_stgcn"
 
 
 def main():
@@ -917,10 +1009,13 @@ def main():
             config[key] = str(value)
     config.update(
         {
-            "model_type": "stgcn",
+            "model_type": "fall_adaptive_stgcn",
             "feature_mode": "xy66",
             "channels": list(STGCN_CHANNELS),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+            "adaptive_graph": True,
+            "fall_aware_joints": list(FALL_AWARE_JOINTS),
+            "adaptive_graph_formula": "A_physical + alpha*A_fall_prior + beta*tanh(A_learnable)",
             "pose_extractor": "BlazePose",
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
@@ -945,7 +1040,7 @@ def main():
 
     metrics_lines = []
     metrics_lines.append("=" * 80)
-    metrics_lines.append("MODEL: ST-GCN")
+    metrics_lines.append("MODEL: Fall-aware Adaptive ST-GCN")
     metrics_lines.append("=" * 80)
     metrics_lines.append(f"data_root: {args.data_root}")
     metrics_lines.append("feature_mode: xy66")
@@ -979,7 +1074,7 @@ def main():
 
         print("\n" + "=" * 72)
         print(
-            f"ST-GCN | Fold {fold}/{args.folds} | "
+            f"Fall-Aware ST-GCN | Fold {fold}/{args.folds} | "
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
@@ -1040,7 +1135,7 @@ def main():
         metrics_lines.append("")
 
         checkpoint = {
-            "model_type": "stgcn",
+            "model_type": "fall_adaptive_stgcn",
             "input_dim": x.shape[-1],
             "dropout": args.dropout,
             "channels": STGCN_CHANNELS,
@@ -1131,7 +1226,7 @@ def main():
     pred_df.to_csv(output / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
-    print("ST-GCN OVERALL")
+    print("FALL-AWARE ADAPTIVE ST-GCN OVERALL")
     print(
         f"Accuracy={overall['accuracy']:.4f} | "
         f"Precision={overall['precision']:.4f} | "

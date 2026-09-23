@@ -1,0 +1,53 @@
+{
+  "pose_estimator": "unspecified",
+  "dataset": "unspecified",
+  "joint_count": 33,
+  "input_dim": 66,
+  "window_size": 30,
+  "parameter_count": 6356482,
+  "device": "cuda:1",
+  "seeds": [
+    42
+  ],
+  "split_seed": 42,
+  "seed_metric_mean": {
+    "window_accuracy": 0.7427200714046636,
+    "window_precision": 0.2404232032105071,
+    "window_recall": 0.7463193657984145,
+    "window_f1": 0.36368653421633557,
+    "window_roc_auc": 0.8593424475516634,
+    "window_tn": 5998.0,
+    "window_fp": 2082.0,
+    "window_fn": 224.0,
+    "window_tp": 659.0,
+    "video_accuracy": 0.6714285714285714,
+    "video_precision": 0.0,
+    "video_recall": 0.0,
+    "video_f1": 0.0,
+    "video_roc_auc": NaN,
+    "video_tn": 47.0,
+    "video_fp": 23.0,
+    "video_fn": 0.0,
+    "video_tp": 0.0
+  },
+  "seed_metric_std": {
+    "window_accuracy": 0.0,
+    "window_precision": 0.0,
+    "window_recall": 0.0,
+    "window_f1": 0.0,
+    "window_roc_auc": 0.0,
+    "window_tn": 0.0,
+    "window_fp": 0.0,
+    "window_fn": 0.0,
+    "window_tp": 0.0,
+    "video_accuracy": 0.0,
+    "video_precision": 0.0,
+    "video_recall": 0.0,
+    "video_f1": 0.0,
+    "video_roc_auc": 0.0,
+    "video_tn": 0.0,
+    "video_fp": 0.0,
+    "video_fn": 0.0,
+    "video_tp": 0.0
+  }
+}

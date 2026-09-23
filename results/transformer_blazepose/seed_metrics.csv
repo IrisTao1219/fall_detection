@@ -1,0 +1,2 @@
+seed,window_accuracy,window_precision,window_recall,window_f1,window_roc_auc,window_tn,window_fp,window_fn,window_tp,video_accuracy,video_precision,video_recall,video_f1,video_roc_auc,video_tn,video_fp,video_fn,video_tp
+42,0.7427200714046636,0.2404232032105071,0.7463193657984145,0.36368653421633557,0.8593424475516634,5998,2082,224,659,0.6714285714285714,0.0,0.0,0.0,,47,23,0,0

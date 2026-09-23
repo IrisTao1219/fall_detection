@@ -4,3 +4,4 @@
 /data/pose
 .venv
 models/
+__pychache__/

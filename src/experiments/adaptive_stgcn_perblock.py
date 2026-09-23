@@ -717,9 +717,37 @@ def make_adjacency() -> torch.Tensor:
     return torch.from_numpy(adjacency)
 
 
-class STGCNBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, dropout: float):
+class AdaptiveSTGCNBlock(nn.Module):
+    """
+    ST-GCN block with its own learnable residual adjacency matrix.
+
+    For block l:
+        A_l = normalize(A_physical + lambda_l * tanh(B_l))
+
+    A_physical is the fixed BlazePose skeleton.
+    B_l is a 33x33 learnable residual graph initialized to zero.
+    lambda_l is a learnable scalar gate initialized conservatively.
+
+    Each block learns an independent graph, so shallow and deep layers can
+    model different joint relations.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+        dropout: float,
+        physical_adjacency: torch.Tensor,
+    ):
         super().__init__()
+
+        self.register_buffer("physical_adjacency", physical_adjacency.clone())
+
+        # Independent graph parameters for this block.
+        self.adaptive_residual = nn.Parameter(torch.zeros(33, 33))
+        self.adaptive_scale = nn.Parameter(torch.tensor(0.05, dtype=torch.float32))
+
         self.spatial = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         self.temporal = nn.Conv2d(
             out_channels, out_channels, kernel_size=(TEMPORAL_KERNEL_SIZE, 1),
@@ -736,7 +764,26 @@ class STGCNBlock(nn.Module):
         )
         self.activation = nn.ReLU(inplace=True)
 
-    def forward(self, x: torch.Tensor, adjacency: torch.Tensor) -> torch.Tensor:
+    def effective_adjacency(self) -> torch.Tensor:
+        # Undirected graph: constrain the learned residual to be symmetric.
+        residual = 0.5 * (self.adaptive_residual + self.adaptive_residual.T)
+        residual = torch.tanh(residual)
+
+        adjacency = self.physical_adjacency + self.adaptive_scale * residual
+        adjacency = 0.5 * (adjacency + adjacency.T)
+
+        # Stable symmetric normalization.
+        degree = adjacency.abs().sum(dim=1).clamp_min(1e-6)
+        inv_sqrt_degree = torch.rsqrt(degree)
+        adjacency = (
+            inv_sqrt_degree[:, None]
+            * adjacency
+            * inv_sqrt_degree[None, :]
+        )
+        return adjacency
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        adjacency = self.effective_adjacency()
         spatial = torch.einsum("bctv,vw->bctw", x, adjacency)
         features = self.dropout(self.norm(self.temporal(self.spatial(spatial))))
         return self.activation(features + self.residual(x))
@@ -745,22 +792,35 @@ class STGCNBlock(nn.Module):
 class STGCN(nn.Module):
     def __init__(self, dropout: float = 0.3):
         super().__init__()
-        self.register_buffer("adjacency", make_adjacency())
+
+        physical_adjacency = make_adjacency()
+
         blocks = []
         in_channels = 2
         for layer, out_channels in enumerate(STGCN_CHANNELS):
             # Reduce temporal resolution when entering a wider channel stage.
             stride = 2 if layer in (4, 7) else 1
-            blocks.append(STGCNBlock(in_channels, out_channels, stride, dropout))
+            blocks.append(
+                AdaptiveSTGCNBlock(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    stride=stride,
+                    dropout=dropout,
+                    physical_adjacency=physical_adjacency,
+                )
+            )
             in_channels = out_channels
+
         self.blocks = nn.ModuleList(blocks)
         self.classifier = nn.Linear(STGCN_CHANNELS[-1], 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Loader supplies [B,T,66]; graph layers use [B,C,T,V].
         x = x.reshape(x.shape[0], x.shape[1], 33, 2).permute(0, 3, 1, 2)
+
         for block in self.blocks:
-            x = block(x, self.adjacency)
+            x = block(x)
+
         # Keep logits for CrossEntropyLoss. Prediction uses Softmax in probabilities().
         return self.classifier(x.mean(dim=(2, 3)))
 
@@ -839,7 +899,7 @@ def parse_args():
 def dataset_run_name(data_root: Path) -> str:
     """Keep raw/normalized output folders consistent with the sequence baseline experiment."""
     name = data_root.resolve().name.lower()
-    return "stgcn_normalized" if "normalized" in name else "stgcn"
+    return "adaptive_stgcn_perblock_normalized" if "normalized" in name else "adaptive_stgcn_perblock"
 
 
 def main():
@@ -917,10 +977,15 @@ def main():
             config[key] = str(value)
     config.update(
         {
-            "model_type": "stgcn",
+            "model_type": "adaptive_stgcn_perblock",
             "feature_mode": "xy66",
             "channels": list(STGCN_CHANNELS),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+            "adaptive_graph": True,
+            "adaptive_graph_type": "per_block_learnable_residual",
+            "adaptive_graph_formula": "A_l = normalize(A_physical + lambda_l * tanh(B_l))",
+            "adaptive_scale_init": 0.05,
+            "manual_fall_prior": False,
             "pose_extractor": "BlazePose",
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
@@ -945,7 +1010,7 @@ def main():
 
     metrics_lines = []
     metrics_lines.append("=" * 80)
-    metrics_lines.append("MODEL: ST-GCN")
+    metrics_lines.append("MODEL: Per-block Adaptive ST-GCN")
     metrics_lines.append("=" * 80)
     metrics_lines.append(f"data_root: {args.data_root}")
     metrics_lines.append("feature_mode: xy66")
@@ -979,7 +1044,7 @@ def main():
 
         print("\n" + "=" * 72)
         print(
-            f"ST-GCN | Fold {fold}/{args.folds} | "
+            f"Adaptive ST-GCN | Fold {fold}/{args.folds} | "
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
@@ -1040,7 +1105,7 @@ def main():
         metrics_lines.append("")
 
         checkpoint = {
-            "model_type": "stgcn",
+            "model_type": "adaptive_stgcn_perblock",
             "input_dim": x.shape[-1],
             "dropout": args.dropout,
             "channels": STGCN_CHANNELS,
@@ -1131,7 +1196,7 @@ def main():
     pred_df.to_csv(output / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
-    print("ST-GCN OVERALL")
+    print("PER-BLOCK ADAPTIVE ST-GCN OVERALL")
     print(
         f"Accuracy={overall['accuracy']:.4f} | "
         f"Precision={overall['precision']:.4f} | "
