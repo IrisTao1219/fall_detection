@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Temporal Transformer experiment for pose-keypoint fall detection.
+"""基于姿态关键点序列的 Temporal Transformer 跌倒检测实验。
 
-The loader accepts keypoints from BlazePose, TransPose, ViTPose, or another
-pose estimator as long as every NPZ file follows the contract documented in
-REPRODUCE_4_4.md. Joint counts may differ between separate runs, but must be
-consistent within one data root.
+数据加载器可接收 BlazePose、TransPose、ViTPose 或其他姿态估计器输出的
+关键点，只要每个 NPZ 文件遵守项目约定即可。不同实验可以使用不同关节数，
+但同一次运行的数据目录内必须保持一致。
 
 Example:
     uv run python src/experiment_transformer.py \
@@ -15,264 +14,45 @@ Example:
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import StratifiedGroupKFold
 from torch import nn
 
-from lstm import (
+from common import (
     WindowRecord,
+    aggregate_video_predictions,
+    canonical_sequence_name,
     choose_device,
     compute_metrics,
     discover_npz_files,
+    fit_scaler,
+    inner_group_split_by_video_type,
+    load_fall_frame_labels,
+    make_loader,
+    make_seed_output_dirs,
+    make_urfall_windows,
+    normalize_label,
+    probabilities,
     seed_everything,
+    save_binary_classification_outputs,
+    save_experiment_config,
+    save_metrics_json,
+    save_seed_summary_outputs,
+    seed_metric_summary,
+    tune_threshold,
+    video_type_labels,
 )
-from mlp import make_loader, probabilities
-
-
-LABEL_MAP = {
-    "adl": 0,
-    "normal": 0,
-    "nonfall": 0,
-    "non_fall": 0,
-    "non-fall": 0,
-    "0": 0,
-    "fall": 1,
-    "falling": 1,
-    "1": 1,
-}
-
-
-def normalize_label(value) -> int:
-    """Convert a scalar/string video label to {0, 1}."""
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            value = value.item()
-        elif value.size == 1:
-            value = value.reshape(-1)[0].item()
-    if isinstance(value, bytes):
-        value = value.decode("utf-8")
-    if isinstance(value, str):
-        key = value.strip().lower()
-        if key in LABEL_MAP:
-            return LABEL_MAP[key]
-        raise ValueError(f"Unknown string label: {value!r}")
-    value = int(value)
-    if value not in (0, 1):
-        raise ValueError(f"Expected binary label 0/1, got {value}")
-    return value
-
-
-def canonical_sequence_name(value) -> Optional[str]:
-    """Normalize IDs such as fall-01-cam0-rgb to fall-01."""
-    value = str(value).strip().lower()
-    match = re.search(r"(fall|adl)-?(\d+)", value)
-    if match is None:
-        return None
-    return f"{match.group(1)}-{int(match.group(2)):02d}"
-
-
-def load_fall_frame_labels(csv_path: Path) -> Dict[str, Dict[int, int]]:
-    """Load UR-Fall frame-level posture labels from the first three CSV columns."""
-    csv_path = Path(csv_path)
-    if not csv_path.exists():
-        raise FileNotFoundError(f"UR-Fall annotation CSV not found: {csv_path}")
-
-    annotations: Dict[str, Dict[int, int]] = {}
-    valid_rows = 0
-    with csv_path.open("r", encoding="utf-8-sig") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            if "," in line:
-                row = [item.strip() for item in line.split(",")]
-            elif ";" in line:
-                row = [item.strip() for item in line.split(";")]
-            elif "\t" in line:
-                row = [item.strip() for item in line.split("\t")]
-            else:
-                row = line.split()
-            if len(row) < 3:
-                continue
-
-            sequence_name = canonical_sequence_name(row[0])
-            try:
-                frame_number = int(float(row[1]))
-                posture_label = int(float(row[2]))
-            except ValueError:
-                continue
-
-            if sequence_name is None or not sequence_name.startswith("fall-"):
-                continue
-            if posture_label not in (-1, 0, 1):
-                raise ValueError(
-                    f"{csv_path} line {line_number}: unknown posture label {posture_label}"
-                )
-            annotations.setdefault(sequence_name, {})[frame_number] = posture_label
-            valid_rows += 1
-
-    if valid_rows == 0:
-        raise RuntimeError(f"No valid UR-Fall annotations read from {csv_path}")
-    print(
-        f"Loaded UR-Fall annotations: {len(annotations)} fall sequences | "
-        f"{valid_rows} annotated frames"
-    )
-    return annotations
-
-
-def get_window_label_from_urfall(frame_labels: Sequence[int]) -> Optional[int]:
-    """Apply the same UR-Fall window-label rule as the RF/MLP/LSTM/ST-GCN runs."""
-    labels = np.asarray(frame_labels, dtype=np.int8)
-    labels = labels[labels != 0]  # ignore falling-transition frames
-    if labels.size == 0:
-        return None
-
-    normal_count = int(np.sum(labels == -1))
-    fall_count = int(np.sum(labels == 1))
-    if fall_count > normal_count:
-        return 1
-    if normal_count > fall_count:
-        return 0
-    return None  # exact tie: drop this window
-
-
-def video_type_label(value) -> int:
-    """Original UR-Fall video type used only for grouped stratification."""
-    sequence_name = canonical_sequence_name(value)
-    if sequence_name is None:
-        raise ValueError(f"Cannot infer UR-Fall video type from: {value!r}")
-    return 1 if sequence_name.startswith("fall-") else 0
-
-
-def video_type_labels(groups: np.ndarray) -> np.ndarray:
-    return np.asarray([video_type_label(group) for group in groups], dtype=np.int64)
-
-
-def interpolate_1d(values: np.ndarray) -> np.ndarray:
-    """Linear interpolation in time; edge NaNs use the nearest valid value."""
-    out = values.astype(np.float32, copy=True)
-    idx = np.arange(len(out))
-    valid = np.isfinite(out)
-    if not np.any(valid):
-        return np.zeros_like(out, dtype=np.float32)
-    out[~valid] = np.interp(idx[~valid], idx[valid], out[valid])
-    return out
-
-
-def make_urfall_windows(
-    features: np.ndarray,
-    video_level_label: int,
-    video_id: str,
-    source_file: str,
-    window_size: int,
-    stride: int,
-    frame_indices: np.ndarray,
-    sequence_annotations: Optional[Dict[int, int]],
-    valid_mask: Optional[np.ndarray] = None,
-    min_valid_frames: int = 1,
-    missing_mode: str = "interp",
-):
-    """Create windows using the exact current UR-Fall CSV labeling rule."""
-    frame_count = features.shape[0]
-    if frame_count < window_size:
-        return [], [], []
-
-    frame_indices = np.asarray(frame_indices).reshape(-1)
-    if len(frame_indices) != frame_count:
-        raise ValueError(
-            f"frame_indices length {len(frame_indices)} != feature frames {frame_count}"
-        )
-
-    x_list, y_list, records = [], [], []
-    for start in range(0, frame_count - window_size + 1, stride):
-        end = start + window_size
-        if valid_mask is not None:
-            valid_count = int(np.count_nonzero(valid_mask[start:end]))
-            if valid_count < min_valid_frames:
-                continue
-
-        if video_level_label == 0:
-            y_win = 0
-        else:
-            if sequence_annotations is None:
-                raise RuntimeError(f"Missing frame annotations for fall video {video_id}")
-            posture_labels = []
-            for frame_number in frame_indices[start:end]:
-                posture_label = sequence_annotations.get(int(frame_number))
-                if posture_label is not None:
-                    posture_labels.append(posture_label)
-            y_from_csv = get_window_label_from_urfall(posture_labels)
-            if y_from_csv is None:
-                continue
-            y_win = int(y_from_csv)
-
-        x_win = features[start:end].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(x_win.shape[1]):
-                x_win[:, feature_idx] = interpolate_1d(x_win[:, feature_idx])
-        elif missing_mode == "zero":
-            x_win = np.nan_to_num(x_win, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-        x_list.append(x_win.astype(np.float32))
-        y_list.append(y_win)
-        records.append(
-            WindowRecord(
-                video_id=video_id,
-                source_file=source_file,
-                start_frame=int(frame_indices[start]),
-                end_frame=int(frame_indices[end - 1]),
-                label=y_win,
-            )
-        )
-    return x_list, y_list, records
-
-
-def urfall_inner_split(y: np.ndarray, groups: np.ndarray, seed: int):
-    """Video-grouped validation split, stratified by original ADL/fall video type."""
-    split_y = video_type_labels(groups)
-    unique_groups = np.unique(groups)
-    group_type = {}
-    for group in unique_groups:
-        values = np.unique(split_y[groups == group])
-        if len(values) != 1:
-            raise RuntimeError(f"Video {group} has multiple video types")
-        group_type[group] = int(values[0])
-
-    class_group_counts = np.bincount(
-        np.asarray(list(group_type.values()), dtype=np.int64), minlength=2
-    )
-    n_splits = int(min(5, class_group_counts.min()))
-    if n_splits < 2:
-        raise RuntimeError(
-            "Inner validation needs at least two videos of each original video type; "
-            f"found {class_group_counts.tolist()}"
-        )
-
-    splitter = StratifiedGroupKFold(
-        n_splits=n_splits, shuffle=True, random_state=seed
-    )
-    for fit_idx, val_idx in splitter.split(np.zeros(len(y)), split_y, groups):
-        if len(np.unique(y[fit_idx])) == 2 and len(np.unique(y[val_idx])) == 2:
-            return fit_idx, val_idx
-    raise ValueError(
-        "Could not create a video-grouped validation split with both window classes"
-    )
 
 
 class TemporalTransformer(nn.Module):
-    """Lightweight Transformer encoder over a fixed-length pose sequence."""
+    """用于固定长度姿态序列的轻量 Transformer 编码器。"""
 
     def __init__(
         self,
@@ -297,7 +77,7 @@ class TemporalTransformer(nn.Module):
             dropout=dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=True,
+            norm_first=False,
         )
         self.encoder = nn.TransformerEncoder(
             encoder_layer,
@@ -407,7 +187,7 @@ def load_pose_windows(args) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.Data
             if "frame_indices" in data:
                 frame_indices = np.asarray(data["frame_indices"]).reshape(-1)
             else:
-                # UR-Fall official frame numbers are 1-based.
+                # UR-Fall 官方帧号从 1 开始。
                 frame_indices = np.arange(1, frame_count + 1, dtype=np.int64)
 
         features, frame_valid, joints = _pose_features(
@@ -447,9 +227,9 @@ def load_pose_windows(args) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.Data
                     f"{args.annotation_csv}"
                 )
 
-        # Match the current RF/MLP/LSTM/ST-GCN runs: window validity uses the
-        # NPZ frame-level valid_mask when available. If absent, fall back to
-        # the validity inferred from finite/confident joints.
+        # 与当前 RF/MLP/LSTM/ST-GCN 实验保持一致：窗口有效性优先使用
+        # NPZ 的帧级 valid_mask；如果没有该字段，再退回到由有限坐标和置信度
+        # 推断出的 frame_valid。
         window_valid_mask = (
             np.asarray(valid_mask).reshape(-1).astype(bool)
             if valid_mask is not None
@@ -505,69 +285,8 @@ def load_pose_windows(args) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.Data
     return x, y, group_array, record_frame, joint_count
 
 
-def fit_scaler(
-    x: np.ndarray, fit_idx: np.ndarray, mode: str
-) -> tuple[np.ndarray, np.ndarray]:
-    fit_x = x[fit_idx]
-    if mode == "zscore":
-        offset = fit_x.mean(axis=(0, 1), keepdims=True)
-        scale = fit_x.std(axis=(0, 1), keepdims=True)
-    elif mode == "minmax":
-        offset = fit_x.min(axis=(0, 1), keepdims=True)
-        scale = fit_x.max(axis=(0, 1), keepdims=True) - offset
-    elif mode == "none":
-        offset = np.zeros((1, 1, x.shape[-1]), dtype=np.float32)
-        scale = np.ones((1, 1, x.shape[-1]), dtype=np.float32)
-    else:
-        raise ValueError(f"Unknown normalization mode: {mode}")
-    scale[scale < 1e-6] = 1.0
-    return offset.astype(np.float32), scale.astype(np.float32)
-
-
-def tune_threshold(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
-    objective: str,
-    min_recall: float,
-) -> tuple[float, dict[str, float]]:
-    """Choose a validation threshold instead of assuming 0.5 is calibrated."""
-    candidates = np.unique(np.r_[0.05, np.linspace(0.1, 0.9, 81), 0.95, y_prob])
-    best_threshold = 0.5
-    best_metrics = compute_metrics(y_true, (y_prob >= 0.5).astype(np.int64), y_prob)
-    best_score = -float("inf")
-
-    for threshold in candidates:
-        pred = (y_prob >= threshold).astype(np.int64)
-        metrics = compute_metrics(y_true, pred, y_prob)
-        if metrics["recall"] + 1e-12 < min_recall:
-            continue
-        score = metrics[objective]
-        # Prefer the higher threshold on ties; it usually reduces false positives.
-        if score > best_score or (
-            score == best_score and threshold > best_threshold
-        ):
-            best_score = score
-            best_threshold = float(threshold)
-            best_metrics = metrics
-
-    if best_score == -float("inf"):
-        # If the recall constraint is infeasible, fall back to the requested metric.
-        for threshold in candidates:
-            pred = (y_prob >= threshold).astype(np.int64)
-            metrics = compute_metrics(y_true, pred, y_prob)
-            score = metrics[objective]
-            if score > best_score or (
-                score == best_score and threshold > best_threshold
-            ):
-                best_score = score
-                best_threshold = float(threshold)
-                best_metrics = metrics
-
-    return best_threshold, best_metrics
-
-
 def train_fold(x, y, groups, args, device, seed):
-    fit_idx, val_idx = urfall_inner_split(y, groups, seed)
+    fit_idx, val_idx = inner_group_split_by_video_type(y, groups, seed)
     offset, scale = fit_scaler(x, fit_idx, args.normalization)
     fit_x = ((x[fit_idx] - offset) / scale).astype(np.float32)
     val_x = ((x[val_idx] - offset) / scale).astype(np.float32)
@@ -669,33 +388,6 @@ def _json_args(args) -> dict:
     }
 
 
-def aggregate_video_predictions(seed_frame: pd.DataFrame, mode: str, topk: int) -> pd.DataFrame:
-    rows = []
-    for video_id, group in seed_frame.groupby("video_id", sort=False):
-        probabilities_for_video = group["fall_probability"].to_numpy()
-        if mode == "mean":
-            video_probability = float(probabilities_for_video.mean())
-        elif mode == "max":
-            video_probability = float(probabilities_for_video.max())
-        elif mode == "topk_mean":
-            k = min(topk, len(probabilities_for_video))
-            video_probability = float(np.sort(probabilities_for_video)[-k:].mean())
-        else:
-            raise ValueError(f"Unknown video aggregation: {mode}")
-        rows.append(
-            {
-                "video_id": video_id,
-                "seed": int(group["seed"].iloc[0]),
-                "fold": int(group["fold"].iloc[0]),
-                "label": video_type_label(video_id),
-                "fall_probability": video_probability,
-                "threshold": float(group["threshold"].iloc[0]),
-                "windows": int(len(group)),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Video-grouped temporal Transformer fall detection experiment"
@@ -786,8 +478,8 @@ def main():
     device = choose_device(args.device)
     seed_everything(args.split_seed)
     x, y, groups, records, joint_count = load_pose_windows(args)
-    # A fall video can now contain both ADL and Fall windows, so stratify folds
-    # by the original UR-Fall video type while training/evaluating on window y.
+    # 一个 fall 视频现在可能同时包含 ADL/Fall 窗口，因此外层 fold 按原始
+    # UR-Fall 视频类型分层，训练和评估仍使用窗口级 y。
     split_y = video_type_labels(groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
@@ -824,11 +516,7 @@ def main():
     parameter_count = None
 
     for seed in args.seeds:
-        seed_dir = output / f"seed_{seed}"
-        model_dir = seed_dir / "models"
-        history_dir = seed_dir / "histories"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        history_dir.mkdir(parents=True, exist_ok=True)
+        seed_dir, model_dir, history_dir = make_seed_output_dirs(output, seed)
         seed_predictions = []
         for fold, (train_idx, test_idx) in enumerate(split_indices, 1):
             (
@@ -902,7 +590,6 @@ def main():
             )
 
         seed_frame = pd.concat(seed_predictions, ignore_index=True)
-        seed_frame.to_csv(seed_dir / "predictions.csv", index=False)
         all_predictions.append(seed_frame)
         video_frame = aggregate_video_predictions(
             seed_frame, args.video_aggregation, args.video_topk
@@ -914,6 +601,11 @@ def main():
         all_video_predictions.append(video_frame)
         window_metrics = _metrics_frame(seed_frame)
         video_metrics = _metrics_frame(video_frame)
+        save_binary_classification_outputs(
+            seed_dir,
+            seed_frame,
+            extra_blocks=[("VIDEO METRICS", video_metrics)],
+        )
         seed_rows.append(
             {
                 "seed": seed,
@@ -921,40 +613,14 @@ def main():
                 **{f"video_{key}": value for key, value in video_metrics.items()},
             }
         )
-        cm = confusion_matrix(seed_frame.label, seed_frame.y_pred, labels=[0, 1])
-        pd.DataFrame(
-            cm,
-            index=["true_ADL", "true_Fall"],
-            columns=["pred_ADL", "pred_Fall"],
-        ).to_csv(seed_dir / "confusion_matrix.csv")
-        report = classification_report(
-            seed_frame.label,
-            seed_frame.y_pred,
-            labels=[0, 1],
-            target_names=["ADL", "Fall"],
-            digits=4,
-            zero_division=0,
-        )
-        (seed_dir / "metrics.txt").write_text(
-            "WINDOW METRICS\n"
-            + "\n".join(f"{key}: {value}" for key, value in window_metrics.items())
-            + "\n\nVIDEO METRICS\n"
-            + "\n".join(f"{key}: {value}" for key, value in video_metrics.items())
-            + "\n\nClassification report:\n"
-            + report,
-            encoding="utf-8",
-        )
 
-    prediction_frame = pd.concat(all_predictions, ignore_index=True)
-    prediction_frame.to_csv(output / "predictions.csv", index=False)
-    pd.concat(all_video_predictions, ignore_index=True).to_csv(
-        output / "video_predictions.csv", index=False
+    _, _, seed_frame = save_seed_summary_outputs(
+        output,
+        all_predictions,
+        all_fold_rows,
+        seed_rows,
+        all_video_predictions,
     )
-    fold_frame = pd.DataFrame(all_fold_rows)
-    fold_frame.to_csv(output / "fold_metrics.csv", index=False)
-    seed_frame = pd.DataFrame(seed_rows)
-    seed_frame.to_csv(output / "seed_metrics.csv", index=False)
-    metric_only = seed_frame.drop(columns=["seed"])
 
     summary = {
         "pose_estimator": args.pose_estimator,
@@ -966,13 +632,10 @@ def main():
         "device": str(device),
         "seeds": args.seeds,
         "split_seed": args.split_seed,
-        "seed_metric_mean": metric_only.mean(numeric_only=True).to_dict(),
-        "seed_metric_std": metric_only.std(numeric_only=True, ddof=1).fillna(0).to_dict(),
+        **seed_metric_summary(seed_frame),
     }
-    (output / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    config = _json_args(args)
-    config["output_dir"] = str(output)
-    (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    save_metrics_json(output, summary)
+    save_experiment_config(output, args, {"output_dir": str(output)})
     print(f"Results: {output}")
 
 
