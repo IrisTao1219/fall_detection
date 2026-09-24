@@ -11,7 +11,7 @@ import math
 import random
 import re
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -288,6 +288,132 @@ def discover_npz_files(root: Path) -> List[Path]:
     if not files:
         raise FileNotFoundError(f"在以下目录没有找到 .npz 文件：{root}")
     return files
+
+
+def load_sequence_windows(
+    data_root: Path,
+    window_size: int,
+    stride: int,
+    visibility_threshold: float,
+    missing_mode: str,
+    feature_mode: str = "xy66",
+    joint_indices: Optional[Sequence[int]] = None,
+    min_valid_frames: int = 1,
+    annotation_csv: Path = FALL_ANNOTATION_CSV,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
+    """从 NPZ 目录加载统一的 [N,T,D] 滑动窗口数据。
+
+    该函数对应 LSTM/MLP/Transformer 一类时序实验的公共数据管线。
+    图卷积实验可在此基础上 reshape 成 [N,C,T,V]。
+    """
+    x_all: List[np.ndarray] = []
+    y_all: List[int] = []
+    groups_all: List[str] = []
+    records_all: List[WindowRecord] = []
+
+    files = discover_npz_files(data_root)
+    fall_annotations = load_fall_frame_labels(annotation_csv)
+    skipped_short = 0
+    skipped_no_valid_windows = 0
+
+    for path in files:
+        with np.load(path, allow_pickle=True) as data:
+            if "keypoints" not in data:
+                raise KeyError(f"{path}: missing 'keypoints'")
+
+            keypoints = data["keypoints"]
+            valid_mask = data["valid_mask"] if "valid_mask" in data else None
+            label_data = data["label"] if "label" in data else path.parent.name
+
+            if "video_id" in data:
+                raw_video_id = data["video_id"]
+                if isinstance(raw_video_id, np.ndarray) and raw_video_id.ndim == 0:
+                    raw_video_id = raw_video_id.item()
+                if isinstance(raw_video_id, bytes):
+                    raw_video_id = raw_video_id.decode("utf-8")
+                video_id = str(raw_video_id)
+            else:
+                video_id = path.stem
+
+            frame_count = keypoints.shape[0]
+            if "frame_indices" in data:
+                frame_indices = np.asarray(data["frame_indices"]).reshape(-1)
+            else:
+                frame_indices = np.arange(1, frame_count + 1, dtype=np.int64)
+
+        sequence_name = canonical_sequence_name(video_id)
+        if sequence_name is None:
+            sequence_name = canonical_sequence_name(path.stem)
+
+        if sequence_name is not None:
+            video_level_label = 1 if sequence_name.startswith("fall-") else 0
+        else:
+            video_level_label = normalize_label(label_data)
+
+        sequence_annotations: Optional[Dict[int, int]] = None
+        if video_level_label == 1:
+            if sequence_name is None:
+                raise RuntimeError(
+                    f"无法从 {video_id} / {path.name} 解析 UR-Fall 序列名"
+                )
+            sequence_annotations = fall_annotations.get(sequence_name)
+            if sequence_annotations is None:
+                raise RuntimeError(
+                    f"{video_id} -> {sequence_name} 在 {annotation_csv} 中没有逐帧标注"
+                )
+
+        xy = preprocess_keypoints(
+            keypoints=keypoints,
+            valid_mask=valid_mask,
+            visibility_threshold=visibility_threshold,
+            missing_mode="mask",
+        )
+        features = build_frame_features(
+            xy=xy,
+            feature_mode=feature_mode,
+            joint_indices=joint_indices,
+        )
+        x_list, y_list, records = make_urfall_windows(
+            features=features,
+            video_level_label=video_level_label,
+            video_id=video_id,
+            source_file=str(path),
+            window_size=window_size,
+            stride=stride,
+            frame_indices=frame_indices,
+            sequence_annotations=sequence_annotations,
+            valid_mask=valid_mask,
+            min_valid_frames=min_valid_frames,
+            missing_mode=missing_mode,
+        )
+
+        if frame_count < window_size:
+            skipped_short += 1
+            continue
+        if not x_list:
+            skipped_no_valid_windows += 1
+            continue
+
+        x_all.extend(x_list)
+        y_all.extend(y_list)
+        groups_all.extend([video_id] * len(x_list))
+        records_all.extend(records)
+
+    if not x_all:
+        raise RuntimeError("没有生成有效窗口")
+
+    x = np.stack(x_all).astype(np.float32)
+    y = np.asarray(y_all, dtype=np.int64)
+    groups = np.asarray(groups_all)
+    records = pd.DataFrame([asdict(record) for record in records_all])
+
+    print(
+        f"已加载 {len(files)} 个 NPZ 视频 | windows={len(x)} | shape={x.shape} | "
+        f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
+        f"short_videos_skipped={skipped_short} | "
+        f"no_valid_windows_skipped={skipped_no_valid_windows}"
+    )
+    return x, y, groups, records
 
 
 def make_urfall_windows(

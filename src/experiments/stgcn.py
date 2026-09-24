@@ -39,6 +39,35 @@ from sklearn.model_selection import StratifiedGroupKFold
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+try:
+    from . import common as experiment_common
+    from .common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        inner_group_split_by_video_type,
+        load_sequence_windows,
+        make_loader,
+        probabilities,
+        seed_everything,
+        standardize,
+        video_type_labels,
+    )
+except ImportError:
+    import common as experiment_common
+    from common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        inner_group_split_by_video_type,
+        load_sequence_windows,
+        make_loader,
+        probabilities,
+        seed_everything,
+        standardize,
+        video_type_labels,
+    )
+
 
 # MediaPipe Pose's 33-landmark skeleton. Undirected edges and self loops are
 # added in make_adjacency. The temporal convolution links each joint over time.
@@ -331,75 +360,18 @@ def load_all_windows(
     joint_indices: Optional[Sequence[int]],
     min_valid_frames: int = 1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    x_all: List[np.ndarray] = []
-    y_all: List[int] = []
-    groups_all: List[str] = []
-    records_all: List[WindowRecord] = []
-    files = discover_npz_files(data_root)
-    skipped_short = 0
-
-    for path in files:
-        with np.load(path, allow_pickle=True) as data:
-            if "keypoints" not in data:
-                raise KeyError(f"{path}: missing 'keypoints'")
-            keypoints = data["keypoints"]
-            frame_indices = (
-                np.asarray(data["frame_indices"]).reshape(-1)
-                if "frame_indices" in data
-                else np.arange(1, len(keypoints) + 1, dtype=np.int64)
-            )
-            valid_mask = data["valid_mask"] if "valid_mask" in data else None
-            label_data = data["label"] if "label" in data else path.parent.name
-            if "video_id" in data:
-                raw_video_id = data["video_id"]
-                if isinstance(raw_video_id, np.ndarray) and raw_video_id.ndim == 0:
-                    raw_video_id = raw_video_id.item()
-                if isinstance(raw_video_id, bytes):
-                    raw_video_id = raw_video_id.decode("utf-8")
-                video_id = str(raw_video_id)
-            else:
-                video_id = path.stem
-
-        xy = preprocess_keypoints(
-            keypoints=keypoints,
-            valid_mask=valid_mask,
-            visibility_threshold=visibility_threshold,
-            missing_mode="mask",
-        )
-        features = build_frame_features(xy, feature_mode, joint_indices)
-        x_list, y_list, records = make_windows(
-            features=features,
-            label_data=label_data,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=window_size,
-            stride=stride,
-            frame_indices=frame_indices,
-            valid_mask=valid_mask,
-            min_valid_frames=min_valid_frames,
-            missing_mode=missing_mode,
-        )
-        if not x_list:
-            skipped_short += 1
-            continue
-        x_all.extend(x_list)
-        y_all.extend(y_list)
-        groups_all.extend([video_id] * len(x_list))
-        records_all.extend(records)
-
-    if not x_all:
-        raise RuntimeError("No valid windows were generated.")
-
-    x = np.stack(x_all).astype(np.float32)
-    y = np.asarray(y_all, dtype=np.int64)
-    groups = np.asarray(groups_all)
-    records_df = pd.DataFrame([asdict(record) for record in records_all])
-    print(
-        f"Loaded {len(files)} NPZ videos | windows={len(x)} | shape={x.shape} | "
-        f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
-        f"short_videos_skipped={skipped_short}"
+    x, y, groups, records = experiment_common.load_sequence_windows(
+        data_root=data_root,
+        window_size=window_size,
+        stride=stride,
+        visibility_threshold=visibility_threshold,
+        missing_mode=missing_mode,
+        feature_mode=feature_mode,
+        joint_indices=joint_indices,
+        min_valid_frames=min_valid_frames,
     )
-    return x, y, groups, records_df
+    return x.reshape(x.shape[0], x.shape[1], 33, 2), y, groups, records
+
 
 
 def make_loader(x: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
@@ -677,35 +649,7 @@ def inner_group_split_window_labels(y, groups, seed):
     内层 train/validation 也按视频分组，并按原始视频类型 stratify。
     避免一个 fall 视频同时含 normal/fall 窗口后破坏原 inner_split 假设。
     """
-    split_y = video_type_labels(groups)
-    unique_groups = np.unique(groups)
-
-    group_type = {}
-    for group in unique_groups:
-        values = np.unique(split_y[groups == group])
-        if len(values) != 1:
-            raise RuntimeError(f"视频 {group} 出现多个视频类型")
-        group_type[group] = int(values[0])
-
-    class_group_counts = np.bincount(
-        np.asarray(list(group_type.values()), dtype=np.int64),
-        minlength=2,
-    )
-    n_splits = int(min(5, class_group_counts.min()))
-
-    if n_splits < 2:
-        raise RuntimeError(
-            "内层验证至少需要每种视频类型各 2 个视频；"
-            f"当前为 {class_group_counts.tolist()}"
-        )
-
-    splitter = StratifiedGroupKFold(
-        n_splits=n_splits,
-        shuffle=True,
-        random_state=seed,
-    )
-    fit_idx, val_idx = next(splitter.split(np.zeros(len(y)), split_y, groups))
-    return fit_idx, val_idx
+    return experiment_common.inner_group_split_by_video_type(y, groups, seed)
 
 
 def make_adjacency() -> torch.Tensor:
@@ -816,6 +760,15 @@ def fmt_metric(v):
     return f"{v:.6f}" if isinstance(v, (float, np.floating)) else str(v)
 
 
+seed_everything = experiment_common.seed_everything
+choose_device = experiment_common.choose_device
+video_type_labels = experiment_common.video_type_labels
+make_loader = experiment_common.make_loader
+probabilities = experiment_common.probabilities
+compute_metrics = experiment_common.compute_metrics
+fmt_metric = experiment_common.fmt_metric
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Video-grouped ST-GCN fall detection experiment")
     parser.add_argument("--data-root", type=Path, default=Path("data/keypoints"))
@@ -874,18 +827,6 @@ def main():
         args.missing_mode,
         "xy66",
         None,
-    )
-
-    # 共享 loader 仍负责关键点过滤、插值和滑动窗口生成；
-    # 这里只把原来继承自整段视频的 label 改成 UR-Fall 官方 CSV 的窗口级 label。
-    annotations = load_fall_frame_labels(FALL_ANNOTATION_CSV)
-    x, y, groups, records = apply_urfall_window_labels(
-        x,
-        y,
-        groups,
-        records,
-        args.window_size,
-        annotations,
     )
 
     # 一个 fall 视频现在可以同时含 normal/fall 窗口，所以不能再用窗口 y 的 mode

@@ -72,6 +72,27 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import DataLoader, Dataset
 
+try:
+    from . import common as experiment_common
+    from .common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        load_sequence_windows,
+        seed_everything,
+        video_type_labels,
+    )
+except ImportError:
+    import common as experiment_common
+    from common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        load_sequence_windows,
+        seed_everything,
+        video_type_labels,
+    )
+
 
 # -----------------------------
 # Constants
@@ -496,126 +517,17 @@ def load_all_windows(
     joint_indices: Optional[Sequence[int]],
     min_valid_frames: int = 1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    X_all: List[np.ndarray] = []
-    y_all: List[int] = []
-    groups_all: List[str] = []
-    records_all: List[WindowRecord] = []
-
-    files = discover_npz_files(data_root)
-    fall_annotations = load_fall_frame_labels(FALL_ANNOTATION_CSV)
-    skipped_short = 0
-    skipped_no_valid_windows = 0
-
-    for path in files:
-        with np.load(path, allow_pickle=True) as d:
-            if "keypoints" not in d:
-                raise KeyError(f"{path}: missing 'keypoints'")
-
-            keypoints = d["keypoints"]
-            valid_mask = d["valid_mask"] if "valid_mask" in d else None
-
-            if "label" in d:
-                label_data = d["label"]
-            else:
-                label_data = path.parent.name
-
-            if "video_id" in d:
-                raw_video_id = d["video_id"]
-                if isinstance(raw_video_id, np.ndarray) and raw_video_id.ndim == 0:
-                    raw_video_id = raw_video_id.item()
-                if isinstance(raw_video_id, bytes):
-                    raw_video_id = raw_video_id.decode("utf-8")
-                video_id = str(raw_video_id)
-            else:
-                video_id = path.stem
-
-            num_frames = keypoints.shape[0]
-            if "frame_indices" in d:
-                frame_indices = np.asarray(d["frame_indices"]).reshape(-1)
-            else:
-                # UR-Fall CSV frame numbering is 1-based.
-                frame_indices = np.arange(1, num_frames + 1, dtype=np.int64)
-
-        sequence_name = canonical_sequence_name(video_id)
-        if sequence_name is None:
-            sequence_name = canonical_sequence_name(path.stem)
-
-        # Prefer the UR-Fall sequence name for deciding original video type.
-        # Fall videos are re-labeled per window from the official CSV.
-        if sequence_name is not None:
-            video_level_label = 1 if sequence_name.startswith("fall-") else 0
-        else:
-            video_level_label = normalize_label(label_data)
-
-        sequence_annotations: Optional[Dict[int, int]] = None
-        if video_level_label == 1:
-            if sequence_name is None:
-                raise RuntimeError(
-                    f"Cannot parse UR-Fall sequence name from {video_id} / {path.name}"
-                )
-            sequence_annotations = fall_annotations.get(sequence_name)
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"{video_id} -> {sequence_name} has no frame annotations in "
-                    f"{FALL_ANNOTATION_CSV}"
-                )
-
-        xy = preprocess_keypoints(
-            keypoints=keypoints,
-            valid_mask=valid_mask,
-            visibility_threshold=visibility_threshold,
-            missing_mode="mask",
-        )
-
-        features = build_frame_features(
-            xy=xy,
-            feature_mode=feature_mode,
-            joint_indices=joint_indices,
-        )
-
-        X_list, y_list, records = make_windows(
-            features=features,
-            video_level_label=video_level_label,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=window_size,
-            stride=stride,
-            frame_indices=frame_indices,
-            sequence_annotations=sequence_annotations,
-            valid_mask=valid_mask,
-            min_valid_frames=min_valid_frames,
-            missing_mode=missing_mode,
-        )
-
-        if num_frames < window_size:
-            skipped_short += 1
-            continue
-        if not X_list:
-            skipped_no_valid_windows += 1
-            continue
-
-        X_all.extend(X_list)
-        y_all.extend(y_list)
-        groups_all.extend([video_id] * len(X_list))
-        records_all.extend(records)
-
-    if not X_all:
-        raise RuntimeError("No valid windows were generated.")
-
-    X = np.stack(X_all).astype(np.float32)
-    y = np.asarray(y_all, dtype=np.int64)
-    groups = np.asarray(groups_all)
-    records_df = pd.DataFrame([asdict(r) for r in records_all])
-
-    print(
-        f"Loaded {len(files)} NPZ videos | "
-        f"windows={len(X)} | shape={X.shape} | "
-        f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
-        f"short_videos_skipped={skipped_short} | "
-        f"no_valid_windows_skipped={skipped_no_valid_windows}"
+    return experiment_common.load_sequence_windows(
+        data_root=data_root,
+        window_size=window_size,
+        stride=stride,
+        visibility_threshold=visibility_threshold,
+        missing_mode=missing_mode,
+        feature_mode=feature_mode,
+        joint_indices=joint_indices,
+        min_valid_frames=min_valid_frames,
+        annotation_csv=FALL_ANNOTATION_CSV,
     )
-
-    return X, y, groups, records_df
 
 
 # -----------------------------
@@ -826,6 +738,13 @@ def fmt_metric(v: float) -> str:
     if isinstance(v, float) and math.isnan(v):
         return "nan"
     return f"{v:.6f}" if isinstance(v, float) else str(v)
+
+
+seed_everything = experiment_common.seed_everything
+choose_device = experiment_common.choose_device
+video_type_labels = experiment_common.video_type_labels
+compute_metrics = experiment_common.compute_metrics
+fmt_metric = experiment_common.fmt_metric
 
 
 # -----------------------------
