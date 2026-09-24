@@ -19,6 +19,29 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedGroupKFold
 
+try:
+    from .common import (
+        canonical_sequence_name as common_canonical_sequence_name,
+        classification_report_text,
+        compute_metrics,
+        get_window_label_from_urfall as common_get_window_label_from_urfall,
+        interpolate_1d,
+        load_fall_frame_labels as common_load_fall_frame_labels,
+        save_confusion_matrix_csv,
+        video_type_labels,
+    )
+except ImportError:
+    from common import (
+        canonical_sequence_name as common_canonical_sequence_name,
+        classification_report_text,
+        compute_metrics,
+        get_window_label_from_urfall as common_get_window_label_from_urfall,
+        interpolate_1d,
+        load_fall_frame_labels as common_load_fall_frame_labels,
+        save_confusion_matrix_csv,
+        video_type_labels,
+    )
+
 
 # ============================================================
 # 1. 实验配置
@@ -245,15 +268,7 @@ def canonical_sequence_name(value):
         fall-01-cam0-rgb -> fall-01
         fall-01 -> fall-01
     """
-    value = str(value).strip().lower()
-
-    match = re.search(r"(fall|adl)-?(\d+)", value)
-    if match is None:
-        return None
-
-    prefix = match.group(1)
-    number = int(match.group(2))
-    return f"{prefix}-{number:02d}"
+    return common_canonical_sequence_name(value)
 
 
 def load_fall_frame_labels(csv_path):
@@ -275,74 +290,7 @@ def load_fall_frame_labels(csv_path):
 
     同时兼容逗号、分号、Tab 或空白分隔。
     """
-    csv_path = Path(csv_path)
-
-    if not csv_path.exists():
-        raise FileNotFoundError(
-            f"找不到 UR-Fall 标注 CSV：{csv_path}"
-        )
-
-    annotations = {}
-    valid_rows = 0
-
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
-        for line_number, raw_line in enumerate(f, start=1):
-            line = raw_line.strip()
-
-            if not line:
-                continue
-
-            # 官方文件通常是逗号分隔；这里额外兼容常见分隔符。
-            if "," in line:
-                row = [x.strip() for x in line.split(",")]
-            elif ";" in line:
-                row = [x.strip() for x in line.split(";")]
-            elif "\t" in line:
-                row = [x.strip() for x in line.split("\t")]
-            else:
-                row = line.split()
-
-            if len(row) < 3:
-                continue
-
-            sequence_name = canonical_sequence_name(row[0])
-
-            try:
-                frame_number = int(float(row[1]))
-                posture_label = int(float(row[2]))
-            except ValueError:
-                # 如果文件存在表头，会自然跳过表头。
-                continue
-
-            if sequence_name is None:
-                continue
-
-            if not sequence_name.startswith("fall-"):
-                continue
-
-            if posture_label not in (-1, 0, 1):
-                raise ValueError(
-                    f"{csv_path} 第 {line_number} 行出现未知姿态标签："
-                    f"{posture_label}"
-                )
-
-            annotations.setdefault(sequence_name, {})[
-                frame_number
-            ] = posture_label
-
-            valid_rows += 1
-
-    if valid_rows == 0:
-        raise RuntimeError(
-            f"{csv_path} 没有读取到有效标注，请检查 CSV 格式"
-        )
-
-    print(
-        f"加载 UR-Fall fall 标注："
-        f"{len(annotations)} 个序列，{valid_rows} 帧"
-    )
-
-    return annotations
+    return common_load_fall_frame_labels(csv_path)
 
 
 def get_window_label_from_urfall(frame_labels):
@@ -361,22 +309,7 @@ def get_window_label_from_urfall(frame_labels):
         - 剩余有效帧多数投票
         - 没有有效帧或恰好平票时，返回 None，跳过该窗口
     """
-    labels = np.asarray(frame_labels, dtype=np.int8)
-    labels = labels[labels != 0]
-
-    if labels.size == 0:
-        return None
-
-    normal_count = int(np.sum(labels == -1))
-    fall_count = int(np.sum(labels == 1))
-
-    if fall_count > normal_count:
-        return 1
-
-    if normal_count > fall_count:
-        return 0
-
-    return None
+    return common_get_window_label_from_urfall(frame_labels)
 
 
 # ============================================================
@@ -1550,42 +1483,12 @@ def cross_validate(
         # Metrics
         # ----------------------------------------------------
 
-        accuracy = accuracy_score(
-            y_test,
-            prediction
-        )
-
-        precision = precision_score(
-            y_test,
-            prediction,
-            pos_label=POSITIVE_LABEL,
-            zero_division=0
-        )
-
-        recall = recall_score(
-            y_test,
-            prediction,
-            pos_label=POSITIVE_LABEL,
-            zero_division=0
-        )
-
-        f1 = f1_score(
-            y_test,
-            prediction,
-            pos_label=POSITIVE_LABEL,
-            zero_division=0
-        )
-
-        try:
-
-            auc = roc_auc_score(
-                y_test,
-                probability
-            )
-
-        except ValueError:
-
-            auc = np.nan
+        fold_metrics = compute_metrics(y_test, prediction, probability)
+        accuracy = fold_metrics["accuracy"]
+        precision = fold_metrics["precision"]
+        recall = fold_metrics["recall"]
+        f1 = fold_metrics["f1"]
+        auc = fold_metrics["roc_auc"]
 
         fold_results.append([
 
@@ -1663,51 +1566,14 @@ def cross_validate(
     # Overall
     # ========================================================
 
-    accuracy = accuracy_score(
-        y,
-        all_pred
-    )
-
-    precision = precision_score(
-        y,
-        all_pred,
-        pos_label=POSITIVE_LABEL,
-        zero_division=0
-    )
-
-    recall = recall_score(
-        y,
-        all_pred,
-        pos_label=POSITIVE_LABEL,
-        zero_division=0
-    )
-
-    f1 = f1_score(
-        y,
-        all_pred,
-        pos_label=POSITIVE_LABEL,
-        zero_division=0
-    )
-
-    auc = roc_auc_score(
-        y,
-        all_prob
-    )
-
-    cm = confusion_matrix(
-        y,
-        all_pred
-    )
-
-    report = classification_report(
-        y,
-        all_pred,
-        target_names=[
-            "ADL",
-            "Fall",
-        ],
-        digits=4
-    )
+    overall_metrics = compute_metrics(y, all_pred, all_prob)
+    accuracy = overall_metrics["accuracy"]
+    precision = overall_metrics["precision"]
+    recall = overall_metrics["recall"]
+    f1 = overall_metrics["f1"]
+    auc = overall_metrics["roc_auc"]
+    cm = save_confusion_matrix_csv(RESULT_DIR, y, all_pred)
+    report = classification_report_text(y, all_pred)
 
     print()
     print(
@@ -1767,15 +1633,6 @@ def cross_validate(
         all_pred,
         all_prob,
         fold_ids
-    )
-
-    # confusion matrix
-    np.savetxt(
-        RESULT_DIR
-        / "confusion_matrix.csv",
-        cm,
-        delimiter=",",
-        fmt="%d"
     )
 
     # metrics

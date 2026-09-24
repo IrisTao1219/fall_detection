@@ -41,6 +41,33 @@ from sklearn.model_selection import StratifiedGroupKFold
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+try:
+    from . import common as experiment_common
+    from .common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        inner_group_split_by_video_type,
+        load_sequence_windows,
+        make_loader,
+        probabilities,
+        seed_everything,
+        video_type_labels,
+    )
+except ImportError:
+    import common as experiment_common
+    from common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        inner_group_split_by_video_type,
+        load_sequence_windows,
+        make_loader,
+        probabilities,
+        seed_everything,
+        video_type_labels,
+    )
+
 
 # MediaPipe / BlazePose 33-landmark physical skeleton used by graph.blazepose.
 POSE_EDGES = (
@@ -321,70 +348,21 @@ def load_all_windows(
     feature_mode: str,
     joint_indices: Optional[Sequence[int]],
     min_valid_frames: int = 1,
+    annotation_csv: Path = Path("data/urfall-cam0-falls.csv"),
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    x_all: List[np.ndarray] = []
-    y_all: List[int] = []
-    groups_all: List[str] = []
-    records_all: List[WindowRecord] = []
-    files = discover_npz_files(data_root)
-    skipped_short = 0
-
-    for path in files:
-        with np.load(path, allow_pickle=True) as data:
-            if "keypoints" not in data:
-                raise KeyError(f"{path}: missing 'keypoints'")
-            keypoints = data["keypoints"]
-            valid_mask = data["valid_mask"] if "valid_mask" in data else None
-            label_data = data["label"] if "label" in data else path.parent.name
-            if "video_id" in data:
-                raw_video_id = data["video_id"]
-                if isinstance(raw_video_id, np.ndarray) and raw_video_id.ndim == 0:
-                    raw_video_id = raw_video_id.item()
-                if isinstance(raw_video_id, bytes):
-                    raw_video_id = raw_video_id.decode("utf-8")
-                video_id = str(raw_video_id)
-            else:
-                video_id = path.stem
-
-        xy = preprocess_keypoints(
-            keypoints=keypoints,
-            valid_mask=valid_mask,
-            visibility_threshold=visibility_threshold,
-            missing_mode="mask",
-        )
-        features = build_frame_features(xy, feature_mode, joint_indices)
-        x_list, y_list, records = make_windows(
-            features=features,
-            label_data=label_data,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=window_size,
-            stride=stride,
-            valid_mask=valid_mask,
-            min_valid_frames=min_valid_frames,
-            missing_mode=missing_mode,
-        )
-        if not x_list:
-            skipped_short += 1
-            continue
-        x_all.extend(x_list)
-        y_all.extend(y_list)
-        groups_all.extend([video_id] * len(x_list))
-        records_all.extend(records)
-
-    if not x_all:
-        raise RuntimeError("No valid windows were generated.")
-
-    x = np.stack(x_all).astype(np.float32)
-    y = np.asarray(y_all, dtype=np.int64)
-    groups = np.asarray(groups_all)
-    records_df = pd.DataFrame([asdict(record) for record in records_all])
-    print(
-        f"Loaded {len(files)} NPZ videos | windows={len(x)} | shape={x.shape} | "
-        f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
-        f"short_videos_skipped={skipped_short}"
+    x, y, groups, records = experiment_common.load_sequence_windows(
+        data_root=data_root,
+        window_size=window_size,
+        stride=stride,
+        visibility_threshold=visibility_threshold,
+        missing_mode=missing_mode,
+        feature_mode=feature_mode,
+        joint_indices=joint_indices,
+        min_valid_frames=min_valid_frames,
+        annotation_csv=annotation_csv,
     )
-    return x, y, groups, records_df
+    return x.reshape(x.shape[0], x.shape[1], 33, 2), y, groups, records
+
 
 
 def make_loader(x: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
@@ -714,35 +692,7 @@ def inner_group_split_window_labels(y, groups, seed):
     内层 train/validation 也按视频分组，并按原始视频类型 stratify。
     避免一个 fall 视频同时含 normal/fall 窗口后破坏原 inner_split 假设。
     """
-    split_y = video_type_labels(groups)
-    unique_groups = np.unique(groups)
-
-    group_type = {}
-    for group in unique_groups:
-        values = np.unique(split_y[groups == group])
-        if len(values) != 1:
-            raise RuntimeError(f"视频 {group} 出现多个视频类型")
-        group_type[group] = int(values[0])
-
-    class_group_counts = np.bincount(
-        np.asarray(list(group_type.values()), dtype=np.int64),
-        minlength=2,
-    )
-    n_splits = int(min(5, class_group_counts.min()))
-
-    if n_splits < 2:
-        raise RuntimeError(
-            "内层验证至少需要每种视频类型各 2 个视频；"
-            f"当前为 {class_group_counts.tolist()}"
-        )
-
-    splitter = StratifiedGroupKFold(
-        n_splits=n_splits,
-        shuffle=True,
-        random_state=seed,
-    )
-    fit_idx, val_idx = next(splitter.split(np.zeros(len(y)), split_y, groups))
-    return fit_idx, val_idx
+    return experiment_common.inner_group_split_by_video_type(y, groups, seed)
 
 
 def standardize(x: np.ndarray, fit_idx: np.ndarray):
@@ -1139,6 +1089,15 @@ def fmt_metric(v):
     return f"{v:.6f}" if isinstance(v, (float, np.floating)) else str(v)
 
 
+seed_everything = experiment_common.seed_everything
+choose_device = experiment_common.choose_device
+video_type_labels = experiment_common.video_type_labels
+make_loader = experiment_common.make_loader
+probabilities = experiment_common.probabilities
+compute_metrics = experiment_common.compute_metrics
+fmt_metric = experiment_common.fmt_metric
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Official BlockGCN on UR-Fall with BlazePose and video-grouped CV"
@@ -1231,12 +1190,8 @@ def main():
         args.missing_mode,
         "xy66",
         None,
+        annotation_csv=args.annotation_csv,
     )
-    annotations = load_fall_frame_labels(args.annotation_csv)
-    x, y, groups, records = apply_urfall_window_labels(
-        x, y, groups, records, args.window_size, annotations
-    )
-
     split_y = video_type_labels(groups)
     group_df = pd.DataFrame({"group": groups, "video_type": split_y}).drop_duplicates("group")
     class_groups = np.bincount(group_df["video_type"].to_numpy(dtype=np.int64), minlength=2)
