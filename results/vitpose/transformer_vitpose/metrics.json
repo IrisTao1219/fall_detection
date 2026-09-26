@@ -1,0 +1,53 @@
+{
+  "pose_estimator": "ViTPose",
+  "dataset": "UR-Fall",
+  "joint_count": 17,
+  "input_dim": 34,
+  "window_size": 30,
+  "parameter_count": 405378,
+  "device": "cuda:1",
+  "seeds": [
+    42
+  ],
+  "split_seed": 42,
+  "seed_metric_mean": {
+    "window_accuracy": 0.9699979728360024,
+    "window_precision": 0.893644617380026,
+    "window_recall": 0.7630121816168328,
+    "window_f1": 0.8231780167264038,
+    "window_roc_auc": 0.9429040071098248,
+    "window_tn": 8881.0,
+    "window_fp": 82.0,
+    "window_fn": 214.0,
+    "window_tp": 689.0,
+    "video_accuracy": 0.9285714285714286,
+    "video_precision": 0.9032258064516129,
+    "video_recall": 0.9333333333333333,
+    "video_f1": 0.9180327868852459,
+    "video_roc_auc": 0.9466666666666667,
+    "video_tn": 37.0,
+    "video_fp": 3.0,
+    "video_fn": 2.0,
+    "video_tp": 28.0
+  },
+  "seed_metric_std": {
+    "window_accuracy": 0.0,
+    "window_precision": 0.0,
+    "window_recall": 0.0,
+    "window_f1": 0.0,
+    "window_roc_auc": 0.0,
+    "window_tn": 0.0,
+    "window_fp": 0.0,
+    "window_fn": 0.0,
+    "window_tp": 0.0,
+    "video_accuracy": 0.0,
+    "video_precision": 0.0,
+    "video_recall": 0.0,
+    "video_f1": 0.0,
+    "video_roc_auc": 0.0,
+    "video_tn": 0.0,
+    "video_fp": 0.0,
+    "video_fn": 0.0,
+    "video_tp": 0.0
+  }
+}
