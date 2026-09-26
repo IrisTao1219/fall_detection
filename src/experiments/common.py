@@ -11,6 +11,7 @@ import math
 import random
 import re
 import json
+from io import StringIO
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -600,7 +601,7 @@ def load_windows_cache(cache_path: Path) -> Tuple[np.ndarray, np.ndarray, np.nda
         groups = data["groups"].astype(str)
         records_json = str(data["records_json"].item())
         config_json = str(data["config_json"].item())
-    records = pd.read_json(records_json, orient="records")
+    records = pd.read_json(StringIO(records_json), orient="records")
     config = json.loads(config_json) if config_json else {}
     return x, y, groups, records, config
 
