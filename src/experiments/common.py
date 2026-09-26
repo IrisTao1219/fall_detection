@@ -280,12 +280,20 @@ def preprocess_keypoints(
         joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
 
     if valid_mask is not None:
-        supplied_frame_valid = np.asarray(valid_mask).reshape(-1).astype(bool)
-        if len(supplied_frame_valid) != xy.shape[0]:
-            raise ValueError(
-                f"valid_mask 长度 {len(supplied_frame_valid)} 与帧数 {xy.shape[0]} 不一致"
-            )
-        joint_valid &= supplied_frame_valid[:, None]
+        supplied_valid = np.asarray(valid_mask).astype(bool)
+        if supplied_valid.shape == xy.shape[:2]:
+            joint_valid &= supplied_valid
+        else:
+            supplied_flat = supplied_valid.reshape(-1)
+            if supplied_flat.size == xy.shape[0] * xy.shape[1]:
+                joint_valid &= supplied_flat.reshape(xy.shape[:2])
+            elif supplied_flat.size == xy.shape[0]:
+                joint_valid &= supplied_flat[:, None]
+            else:
+                raise ValueError(
+                    f"valid_mask 长度 {supplied_flat.size} 与帧数/关节数 "
+                    f"{xy.shape[:2]} 不一致"
+                )
 
     xy[~joint_valid] = np.nan
     if missing_mode == "mask":
@@ -303,6 +311,28 @@ def preprocess_keypoints(
         raise ValueError(f"未知 missing_mode：{missing_mode}")
 
     return xy.astype(np.float32)
+
+
+def frame_valid_mask_from_npz_mask(
+    valid_mask: Optional[np.ndarray],
+    frame_count: int,
+    joint_count: int,
+) -> Optional[np.ndarray]:
+    """把 NPZ 中可能的帧级/关节级 valid_mask 统一成帧级 [T]。"""
+    if valid_mask is None:
+        return None
+    supplied_valid = np.asarray(valid_mask).astype(bool)
+    if supplied_valid.shape == (frame_count, joint_count):
+        return supplied_valid.any(axis=1)
+    supplied_flat = supplied_valid.reshape(-1)
+    if supplied_flat.size == frame_count * joint_count:
+        return supplied_flat.reshape(frame_count, joint_count).any(axis=1)
+    if supplied_flat.size == frame_count:
+        return supplied_flat
+    raise ValueError(
+        f"valid_mask 长度 {supplied_flat.size} 与帧数/关节数 "
+        f"({frame_count}, {joint_count}) 不一致"
+    )
 
 
 def adapt_keypoints_from_npz(
@@ -344,7 +374,12 @@ def adapt_keypoints_from_npz(
         scores=scores,
         confidence_index=selected_confidence_index,
     )
-    return xy, valid_mask, int(xy.shape[1]), spec.name
+    frame_valid_mask = frame_valid_mask_from_npz_mask(
+        valid_mask,
+        frame_count=int(xy.shape[0]),
+        joint_count=int(xy.shape[1]),
+    )
+    return xy, frame_valid_mask, int(xy.shape[1]), spec.name
 
 
 def fill_missing_temporally(
