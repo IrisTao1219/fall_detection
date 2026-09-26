@@ -148,6 +148,39 @@ def video_type_labels(groups: np.ndarray) -> np.ndarray:
     return np.asarray([video_type_label(group) for group in groups], dtype=np.int64)
 
 
+def group_stratification_labels(y: np.ndarray, groups: np.ndarray) -> np.ndarray:
+    """Return per-window labels used only for grouped stratification.
+
+    UR-Fall groups encode the original video type in their names, so we keep
+    using that stable video-level type. Datasets such as Le2i have mixed
+    videos; for those, stratify each group by whether it contains at least one
+    positive window.
+    """
+    try:
+        labels = video_type_labels(groups)
+    except ValueError:
+        y = np.asarray(y, dtype=np.int64)
+        groups = np.asarray(groups).astype(str)
+        group_labels: Dict[str, int] = {}
+        for group in np.unique(groups):
+            group_y = y[groups == group]
+            group_labels[str(group)] = int(np.any(group_y == 1))
+        labels = np.asarray([group_labels[str(group)] for group in groups], dtype=np.int64)
+    if len(np.unique(labels)) >= 2:
+        return labels
+
+    # Some event datasets, including typical Le2i exports, can have a fall
+    # interval in every video. StratifiedGroupKFold still needs at least two
+    # strata, so create a stable auxiliary split label while keeping groups
+    # intact and leaving the real y labels untouched.
+    groups = np.asarray(groups).astype(str)
+    group_to_aux = {
+        str(group): index % 2
+        for index, group in enumerate(sorted(np.unique(groups)))
+    }
+    return np.asarray([group_to_aux[str(group)] for group in groups], dtype=np.int64)
+
+
 def load_fall_frame_labels(csv_path: Path) -> Dict[str, Dict[int, int]]:
     """从前三列读取 UR-Fall 官方逐帧姿态标签。"""
     csv_path = Path(csv_path)
@@ -468,7 +501,8 @@ def load_sequence_windows(
     groups_all: List[str] = []
     records_all: List[WindowRecord] = []
     files = discover_npz_files(data_root)
-    fall_annotations = load_fall_frame_labels(annotation_csv)
+    fall_annotations: Optional[Dict[str, Dict[int, int]]] = None
+    detected_label_source: Optional[str] = None
     skipped_short = 0
     skipped_no_valid_windows = 0
     for path in files:
@@ -495,42 +529,73 @@ def load_sequence_windows(
                 frame_indices = np.asarray(data["frame_indices"]).reshape(-1)
             else:
                 frame_indices = np.arange(1, frame_count + 1, dtype=np.int64)
-        sequence_name = canonical_sequence_name(video_id)
-        if sequence_name is None:
-            sequence_name = canonical_sequence_name(path.stem)
-        if sequence_name is not None:
-            video_level_label = 1 if sequence_name.startswith("fall-") else 0
-        else:
-            video_level_label = normalize_label(label_data)
-        sequence_annotations: Optional[Dict[int, int]] = None
-        if video_level_label == 1:
-            if sequence_name is None:
-                raise RuntimeError(
-                    f"无法从 {video_id} / {path.name} 解析 UR-Fall 序列名"
-                )
-            sequence_annotations = fall_annotations.get(sequence_name)
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"{video_id} -> {sequence_name} 在 {annotation_csv} 中没有逐帧标注"
-                )
+            frame_labels = (
+                np.asarray(data["frame_labels"]).reshape(-1)
+                if "frame_labels" in data
+                else None
+            )
         features = build_frame_features(
             xy=xy,
             feature_mode=feature_mode,
             joint_indices=joint_indices,
         )
-        x_list, y_list, records = make_urfall_windows(
-            features=features,
-            video_level_label=video_level_label,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=window_size,
-            stride=stride,
-            frame_indices=frame_indices,
-            sequence_annotations=sequence_annotations,
-            valid_mask=valid_mask,
-            min_valid_frames=min_valid_frames,
-            missing_mode=missing_mode,
-        )
+        if frame_labels is not None:
+            current_label_source = "frame_labels"
+            if detected_label_source is None:
+                detected_label_source = current_label_source
+            elif detected_label_source != current_label_source:
+                raise RuntimeError("同一窗口缓存中混用了 frame_labels 和 UR-Fall CSV 标签源")
+            x_list, y_list, records = make_frame_label_windows(
+                features=features,
+                frame_labels=frame_labels,
+                video_id=video_id,
+                source_file=str(path),
+                window_size=window_size,
+                stride=stride,
+                frame_indices=frame_indices,
+                valid_mask=valid_mask,
+                min_valid_frames=min_valid_frames,
+                missing_mode=missing_mode,
+            )
+        else:
+            current_label_source = "urfall_csv"
+            if detected_label_source is None:
+                detected_label_source = current_label_source
+            elif detected_label_source != current_label_source:
+                raise RuntimeError("同一窗口缓存中混用了 frame_labels 和 UR-Fall CSV 标签源")
+            if fall_annotations is None:
+                fall_annotations = load_fall_frame_labels(annotation_csv)
+            sequence_name = canonical_sequence_name(video_id)
+            if sequence_name is None:
+                sequence_name = canonical_sequence_name(path.stem)
+            if sequence_name is not None:
+                video_level_label = 1 if sequence_name.startswith("fall-") else 0
+            else:
+                video_level_label = normalize_label(label_data)
+            sequence_annotations: Optional[Dict[int, int]] = None
+            if video_level_label == 1:
+                if sequence_name is None:
+                    raise RuntimeError(
+                        f"无法从 {video_id} / {path.name} 解析 UR-Fall 序列名"
+                    )
+                sequence_annotations = fall_annotations.get(sequence_name)
+                if sequence_annotations is None:
+                    raise RuntimeError(
+                        f"{video_id} -> {sequence_name} 在 {annotation_csv} 中没有逐帧标注"
+                    )
+            x_list, y_list, records = make_urfall_windows(
+                features=features,
+                video_level_label=video_level_label,
+                video_id=video_id,
+                source_file=str(path),
+                window_size=window_size,
+                stride=stride,
+                frame_indices=frame_indices,
+                sequence_annotations=sequence_annotations,
+                valid_mask=valid_mask,
+                min_valid_frames=min_valid_frames,
+                missing_mode=missing_mode,
+            )
         if frame_count < window_size:
             skipped_short += 1
             continue
@@ -560,6 +625,7 @@ def load_sequence_windows(
     else:
         output_joint_count = int(joint_count)
     metadata = {
+        "label_source": detected_label_source or "unknown",
         "keypoint_adapter": resolved_adapter,
         "joint_count": output_joint_count,
         "feature_dim": int(x.shape[-1]),
@@ -671,6 +737,65 @@ def make_urfall_windows(
     return x_list, y_list, records
 
 
+def make_frame_label_windows(
+    features: np.ndarray,
+    frame_labels: np.ndarray,
+    video_id: str,
+    source_file: str,
+    window_size: int,
+    stride: int,
+    frame_indices: np.ndarray,
+    valid_mask: Optional[np.ndarray] = None,
+    min_valid_frames: int = 1,
+    missing_mode: str = "interp",
+) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
+    """Generate windows from binary frame labels.
+
+    The window label is the center frame label. Boundary or unknown labels
+    (<0) are skipped. This matches Le2i NPZ files produced by
+    blazepose_le2i.py, where videos can contain both classes.
+    """
+    frame_count = features.shape[0]
+    if frame_count < window_size:
+        return [], [], []
+    frame_indices = np.asarray(frame_indices).reshape(-1)
+    labels = np.asarray(frame_labels).reshape(-1)
+    if len(frame_indices) != frame_count:
+        raise ValueError(
+            f"frame_indices 长度 {len(frame_indices)} 与特征帧数 {frame_count} 不一致"
+        )
+    if len(labels) != frame_count:
+        raise ValueError(
+            f"frame_labels 长度 {len(labels)} 与特征帧数 {frame_count} 不一致"
+        )
+    x_list: List[np.ndarray] = []
+    y_list: List[int] = []
+    records: List[WindowRecord] = []
+    for start in range(0, frame_count - window_size + 1, stride):
+        end = start + window_size
+        if valid_mask is not None:
+            valid_count = int(np.count_nonzero(valid_mask[start:end]))
+            if valid_count < min_valid_frames:
+                continue
+        center = start + window_size // 2
+        label = int(labels[center])
+        if label not in (0, 1):
+            continue
+        x_win = fill_missing_temporally(features[start:end], missing_mode)
+        x_list.append(x_win.astype(np.float32))
+        y_list.append(label)
+        records.append(
+            WindowRecord(
+                video_id=video_id,
+                source_file=source_file,
+                start_frame=int(frame_indices[start]),
+                end_frame=int(frame_indices[end - 1]),
+                label=label,
+            )
+        )
+    return x_list, y_list, records
+
+
 def fit_scaler(
     x: np.ndarray,
     fit_idx: np.ndarray,
@@ -764,7 +889,7 @@ def inner_group_split_by_video_type(
     max_splits: int = 5,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """按视频分组，并按原始 ADL/fall 视频类型分层划分验证集。"""
-    split_y = video_type_labels(groups)
+    split_y = group_stratification_labels(y, groups)
     unique_groups = np.unique(groups)
     group_type: Dict[Any, int] = {}
     for group in unique_groups:

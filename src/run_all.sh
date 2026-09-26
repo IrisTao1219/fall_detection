@@ -6,9 +6,10 @@ set -euo pipefail
 #   results/ur/{rf,mlp,lstm,stgcn}
 #
 # Other built-in profiles:
-#   --dataset ur-origin              -> results/ur_origin/{rf,mlp,lstm,stgcn}
-#   --dataset blazepose-normalized   -> results/blazepose_normalized/{model}/{model_normalized}
-DATASET="ur"
+#   --keypoints ur-origin            -> results/ur_origin/{rf,mlp,lstm,stgcn}
+#   --keypoints blazepose-normalized -> results/blazepose_normalized/{model}/{model_normalized}
+#   --keypoints le2i-blazepose       -> results/le2i_blazepose/{rf,mlp,lstm,stgcn}
+KEYPOINTS_PROFILE="ur"
 DATA_ROOT="data/keypoints_ur"
 OUTPUT_ROOT="results/ur"
 WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
@@ -22,7 +23,7 @@ usage() {
 Usage: bash src/run_all.sh [options]
 
 Options:
-  --dataset NAME          Built-in profile: ur, ur-origin, blazepose-normalized
+  --keypoints NAME        Built-in profile: ur, ur-origin, blazepose-normalized, le2i-blazepose
   --data-root PATH        Override keypoint NPZ root
   --output-root PATH      Override output root
   --windows-cache PATH    Override shared windows cache path
@@ -37,8 +38,8 @@ Current default:
 EOF
 }
 
-apply_dataset_profile() {
-  case "$DATASET" in
+apply_keypoints_profile() {
+  case "$KEYPOINTS_PROFILE" in
     ur)
       DATA_ROOT="data/keypoints_ur"
       OUTPUT_ROOT="results/ur"
@@ -63,26 +64,34 @@ apply_dataset_profile() {
       STRIDE="1"
       NEST_OUTPUT_BY_MODEL="1"
       ;;
+    le2i|le2i-blazepose|blazepose-le2i)
+      DATA_ROOT="data/keypoints_le2i"
+      OUTPUT_ROOT="results/le2i_blazepose"
+      WINDOWS_CACHE="data/windows/keypoints_le2i_windows.npz"
+      WINDOW_SIZE="25"
+      STRIDE="5"
+      NEST_OUTPUT_BY_MODEL="0"
+      ;;
     *)
-      echo "Unknown dataset profile: $DATASET" >&2
+      echo "Unknown keypoints profile: $KEYPOINTS_PROFILE" >&2
       usage >&2
       exit 1
       ;;
   esac
 }
 
-apply_dataset_profile
+apply_keypoints_profile
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dataset)
-      DATASET="$2"
-      apply_dataset_profile
+    --keypoints)
+      KEYPOINTS_PROFILE="$2"
+      apply_keypoints_profile
       shift 2
       ;;
-    --dataset=*)
-      DATASET="${1#*=}"
-      apply_dataset_profile
+    --keypoints=*)
+      KEYPOINTS_PROFILE="${1#*=}"
+      apply_keypoints_profile
       shift
       ;;
     --data-root)
@@ -154,12 +163,11 @@ EXPERIMENTS=(
   "mlp"
   "lstm"
   "stgcn"
-  "transformer"
 )
 
 echo "========================================"
 echo "Preparing shared windows cache"
-echo "Dataset: $DATASET"
+echo "Keypoints profile: $KEYPOINTS_PROFILE"
 echo "Data root: $DATA_ROOT"
 echo "Output: $WINDOWS_CACHE"
 echo "Window size: $WINDOW_SIZE"

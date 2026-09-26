@@ -568,7 +568,7 @@ def run_model_cv(
 
     # Stratify by the ORIGINAL video type (adl/fall), not by the majority
     # of window labels. A fall video can legitimately contain many ADL windows.
-    split_y = video_type_labels(groups)
+    split_y = experiment_common.group_stratification_labels(y, groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
         .drop_duplicates("group")

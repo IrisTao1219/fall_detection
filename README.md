@@ -40,6 +40,37 @@ data/raw/
 
 ## 运行实验
 
+### 一键运行当前实验
+
+推荐优先使用 `src/run_all.sh` 统一生成窗口缓存并依次运行 RF、MLP、LSTM 和 ST-GCN。当前默认 keypoints profile 是 BlazePose + UR-Fall，结果写入 `results/ur/{rf,mlp,lstm,stgcn}`：
+
+```bash
+bash src/run_all.sh
+```
+
+也可以显式指定 keypoints profile：
+
+```bash
+bash src/run_all.sh --keypoints ur
+bash src/run_all.sh --keypoints ur-origin
+bash src/run_all.sh --keypoints blazepose-normalized
+```
+
+新增的 BlazePose + Le2i keypoints profile 使用 `data/keypoints_le2i/*.npz` 中的逐帧 `frame_labels` 生成窗口标签，结果写入 `results/le2i_blazepose/{rf,mlp,lstm,stgcn}`：
+
+```bash
+bash src/run_all.sh --keypoints le2i-blazepose
+```
+
+常用覆盖参数：
+
+```bash
+bash src/run_all.sh --keypoints le2i-blazepose --device cuda:0
+bash src/run_all.sh --keypoints le2i-blazepose --window-size 25 --stride 5
+```
+
+`run_all.sh` 会先调用 `src/prepare_windows_ur.py` 生成共享窗口缓存。窗口脚本会根据 keypoints NPZ 自动选择标签来源：NPZ 中存在 `frame_labels` 时使用逐帧标签；否则按 UR-Fall keypoints 读取官方 `data/urfall-cam0-falls.csv`。
+
 ### 1. 提取姿态关键点
 
 ```bash
@@ -54,6 +85,39 @@ uv run python src/blazepose.py
 | `valid_mask` | 每帧是否检测到人体 |
 | `frame_indices`, `timestamps`, `fps` | 原始帧号、秒级时间戳和帧率 |
 | `label`, `video_id` | 视频类别与编号 |
+
+### Le2i：抽帧、提取 BlazePose、运行实验
+
+Le2i 原始视频和标注放在 `data/raw_le2i/` 后，先将视频抽成 PNG 并生成每段视频的 `labels.csv`：
+
+```bash
+uv run python src/parse_le2i_annotations.py
+```
+
+再对抽帧后的 `data/raw_le2i/pngs/` 运行 BlazePose，输出 `data/keypoints_le2i/<video_id>.npz`：
+
+```bash
+uv run python src/blazepose_le2i.py
+```
+
+Le2i 的 NPZ 中 `label` 字段为 `mixed`，真正用于训练的是逐帧 `frame_labels`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `keypoints` | `[帧数, 33, 4]`；最后一维为 `x, y, z, visibility` |
+| `valid_mask` | 每帧是否检测到人体 |
+| `frame_indices`, `timestamps`, `fps` | 原始帧号、秒级时间戳和帧率；Le2i 按 25 FPS 处理 |
+| `frame_labels` | `[帧数]`；`0=non-fall`，`1=fall` |
+| `fall_start`, `fall_end`, `bboxes` | 原始标注中的跌倒区间和目标框信息 |
+| `label`, `video_id` | `label` 固定为 `mixed`，`video_id` 为 Le2i 视频编号 |
+
+然后运行全部模型：
+
+```bash
+bash src/run_all.sh --keypoints le2i-blazepose
+```
+
+默认 Le2i 窗口为 25 帧、步长 5 帧。窗口标签取中心帧的 `frame_labels`，同一原始视频的窗口不会同时出现在训练折和测试折中。
 
 ### 2. 归一化坐标
 

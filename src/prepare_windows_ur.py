@@ -299,10 +299,21 @@ def main() -> None:
     # 保存配置
     # ========================================================
 
-    config = {
+    label_source = metadata.get("label_source", "unknown")
+    fps = 25.0 if label_source == "frame_labels" else URFALL_FPS
+    if label_source == "frame_labels":
+        label_rule = (
+            "Fall/non-fall label is taken from the center frame's "
+            "binary frame_labels value in each keypoints NPZ."
+        )
+    else:
+        label_rule = (
+            "Fall if window center is inside UR-Fall transition label 0; "
+            "Non-fall if window has no transition frames; "
+            "ambiguous boundary windows ignored."
+        )
 
-        "dataset":
-            "UR-Fall",
+    config = {
 
         "data_root":
             str(
@@ -314,20 +325,23 @@ def main() -> None:
                 args.annotation_csv
             ),
 
+        "label_source":
+            label_source,
+
         # ----------------------------------------------------
         # 时间信息
         # ----------------------------------------------------
 
         "fps":
-            URFALL_FPS,
+            fps,
 
         "window_seconds":
             args.window_size
-            / URFALL_FPS,
+            / fps,
 
         "stride":
             args.stride
-            / URFALL_FPS,
+            / fps,
 
         # ----------------------------------------------------
         # 窗口参数
@@ -344,12 +358,7 @@ def main() -> None:
         # ----------------------------------------------------
 
         "label_rule":
-            (
-                "Fall if window center is inside "
-                "UR-Fall transition label 0; "
-                "Non-fall if window has no transition "
-                "frames; ambiguous boundary windows ignored."
-            ),
+            label_rule,
 
         # ----------------------------------------------------
         # 关键点设置

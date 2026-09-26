@@ -670,7 +670,7 @@ def main():
 
     # 一个 fall 视频现在可以同时含 normal/fall 窗口，所以不能再用窗口 y 的 mode
     # 判断“这个视频属于哪一类”。这里按视频名本身的 fall/adl 类型统计。
-    split_y = video_type_labels(groups)
+    split_y = experiment_common.group_stratification_labels(y, groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
         .drop_duplicates("group")

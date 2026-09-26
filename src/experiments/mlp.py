@@ -429,7 +429,7 @@ def main():
     # 同一个 fall 视频现在可同时包含 normal/fall 窗口，
     # 所以 fold 的 stratification 使用视频名本身的 fall/adl 类型，
     # 模型真正训练与指标计算仍使用窗口级 y。
-    split_y = video_type_labels(groups)
+    split_y = experiment_common.group_stratification_labels(y, groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
         .drop_duplicates("group")
