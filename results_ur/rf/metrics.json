@@ -1,0 +1,92 @@
+{
+  "model": "rf",
+  "data_root": "data/keypoints_ur",
+  "output_dir": "results_ur/rf",
+  "overall": {
+    "accuracy": 0.9919028340080972,
+    "precision": 0.972972972972973,
+    "recall": 0.9230769230769231,
+    "f1": 0.9473684210526315,
+    "roc_auc": 0.9987602141448295,
+    "tn": 454,
+    "fp": 1,
+    "fn": 3,
+    "tp": 36
+  },
+  "fold_mean": {
+    "accuracy": 0.9918746129767616,
+    "precision": 0.975,
+    "recall": 0.9214285714285715,
+    "f1": 0.9446153846153846,
+    "roc_auc": 0.9990369181380417
+  },
+  "fold_std": {
+    "accuracy": 0.004547202384612094,
+    "precision": 0.05590169943749474,
+    "recall": 0.07209510442209412,
+    "f1": 0.03127784755277313,
+    "roc_auc": 0.0021535165112357363
+  },
+  "folds": [
+    {
+      "fold": 1,
+      "train_videos": 53,
+      "test_videos": 14,
+      "train_windows": 394,
+      "test_windows": 100,
+      "accuracy": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0
+    },
+    {
+      "fold": 2,
+      "train_videos": 55,
+      "test_videos": 12,
+      "train_windows": 393,
+      "test_windows": 101,
+      "accuracy": 0.9900990099009901,
+      "precision": 1.0,
+      "recall": 0.875,
+      "f1": 0.9333333333333333,
+      "roc_auc": 1.0
+    },
+    {
+      "fold": 3,
+      "train_videos": 54,
+      "test_videos": 13,
+      "train_windows": 398,
+      "test_windows": 96,
+      "accuracy": 0.9895833333333334,
+      "precision": 1.0,
+      "recall": 0.8571428571428571,
+      "f1": 0.9230769230769231,
+      "roc_auc": 0.9951845906902087
+    },
+    {
+      "fold": 4,
+      "train_videos": 53,
+      "test_videos": 14,
+      "train_windows": 397,
+      "test_windows": 97,
+      "accuracy": 0.9896907216494846,
+      "precision": 0.875,
+      "recall": 1.0,
+      "f1": 0.9333333333333333,
+      "roc_auc": 1.0
+    },
+    {
+      "fold": 5,
+      "train_videos": 53,
+      "test_videos": 14,
+      "train_windows": 394,
+      "test_windows": 100,
+      "accuracy": 0.99,
+      "precision": 1.0,
+      "recall": 0.875,
+      "f1": 0.9333333333333333,
+      "roc_auc": 1.0
+    }
+  ]
+}

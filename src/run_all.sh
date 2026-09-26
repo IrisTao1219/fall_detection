@@ -2,9 +2,9 @@
 
 # set -e
 
-DATA_ROOT="data/keypoints_normalized"
-OUTPUT_ROOT="results_normalized"
-WINDOWS_CACHE="${OUTPUT_ROOT}/windows/keypoints_normalized_windows.npz"
+DATA_ROOT="data/keypoints_ur"
+OUTPUT_ROOT="results_ur"
+WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
 
 # DATA_ROOT="data/keypoints_normalized"
 # OUTPUT_ROOT="results_normalized"
