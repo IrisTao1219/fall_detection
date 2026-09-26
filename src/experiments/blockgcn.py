@@ -187,182 +187,6 @@ def normalize_label_array(values: np.ndarray) -> np.ndarray:
     return np.asarray([normalize_label(v) for v in values], dtype=np.int64)
 
 
-def interpolate_1d(values: np.ndarray) -> np.ndarray:
-    out = values.astype(np.float32, copy=True)
-    idx = np.arange(len(out))
-    valid = np.isfinite(out)
-    if not np.any(valid):
-        return np.zeros_like(out, dtype=np.float32)
-    out[~valid] = np.interp(idx[~valid], idx[valid], out[valid])
-    return out
-
-
-def preprocess_keypoints(
-    keypoints: np.ndarray,
-    valid_mask: Optional[np.ndarray],
-    visibility_threshold: float,
-    missing_mode: str,
-) -> np.ndarray:
-    if keypoints.ndim != 3 or keypoints.shape[1] != 33 or keypoints.shape[2] < 2:
-        raise ValueError(f"Expected keypoints [T,33,C>=2], got shape {keypoints.shape}")
-
-    xy = keypoints[..., :2].astype(np.float32, copy=True)
-    frame_count = xy.shape[0]
-    joint_valid = np.isfinite(xy).all(axis=-1)
-
-    if keypoints.shape[2] >= 4:
-        visibility = keypoints[..., 3]
-        joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
-
-    if valid_mask is not None:
-        valid_mask = np.asarray(valid_mask).reshape(-1).astype(bool)
-        if len(valid_mask) != frame_count:
-            raise ValueError(
-                f"valid_mask length {len(valid_mask)} != keypoints frames {frame_count}"
-            )
-        joint_valid &= valid_mask[:, None]
-
-    xy[~joint_valid] = np.nan
-    if missing_mode == "mask":
-        pass
-    elif missing_mode == "zero":
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-    elif missing_mode == "interp":
-        for joint_idx in range(xy.shape[1]):
-            for coord_idx in range(2):
-                xy[:, joint_idx, coord_idx] = interpolate_1d(
-                    xy[:, joint_idx, coord_idx]
-                )
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-    else:
-        raise ValueError(f"Unknown missing_mode: {missing_mode}")
-    return xy.astype(np.float32)
-
-
-def build_frame_features(
-    xy: np.ndarray,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-) -> np.ndarray:
-    if feature_mode == "xy66":
-        return xy.reshape(xy.shape[0], -1).astype(np.float32)
-    if feature_mode == "joints16":
-        if joint_indices is None or len(joint_indices) != 8:
-            raise ValueError("joints16 requires exactly 8 joint indices")
-        idx = np.asarray(joint_indices, dtype=np.int64)
-        if np.any(idx < 0) or np.any(idx >= 33):
-            raise ValueError("All joint indices must be in [0, 32]")
-        return xy[:, idx, :].reshape(xy.shape[0], 16).astype(np.float32)
-    raise ValueError(f"Unknown feature_mode: {feature_mode}")
-
-
-@dataclass
-class WindowRecord:
-    video_id: str
-    source_file: str
-    start_frame: int
-    end_frame: int
-    label: int
-
-
-def make_windows(
-    features: np.ndarray,
-    label_data,
-    video_id: str,
-    source_file: str,
-    window_size: int,
-    stride: int,
-    valid_mask: Optional[np.ndarray] = None,
-    min_valid_frames: int = 1,
-    missing_mode: str = "interp",
-) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
-    frame_count = features.shape[0]
-    if frame_count < window_size:
-        return [], [], []
-
-    label_arr = np.asarray(label_data)
-    is_frame_level = label_arr.ndim > 0 and label_arr.size == frame_count
-    if is_frame_level:
-        frame_labels = normalize_label_array(label_arr.reshape(-1))
-        scalar_label = None
-    else:
-        scalar_label = normalize_label(label_data)
-        frame_labels = None
-
-    x_list: List[np.ndarray] = []
-    y_list: List[int] = []
-    records: List[WindowRecord] = []
-
-    for start_frame in range(0, frame_count - window_size + 1, stride):
-        end_exclusive = start_frame + window_size
-        if valid_mask is not None:
-            valid_count = int(np.count_nonzero(valid_mask[start_frame:end_exclusive]))
-            if valid_count < min_valid_frames:
-                continue
-
-        window = features[start_frame:end_exclusive].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(window.shape[1]):
-                window[:, feature_idx] = interpolate_1d(window[:, feature_idx])
-        elif missing_mode == "zero":
-            window = np.nan_to_num(window, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-        if frame_labels is not None:
-            values, counts = np.unique(
-                frame_labels[start_frame:end_exclusive], return_counts=True
-            )
-            candidates = values[counts == counts.max()]
-            window_label = int(candidates.max())
-        else:
-            window_label = int(scalar_label)
-
-        x_list.append(window.astype(np.float32))
-        y_list.append(window_label)
-        records.append(
-            WindowRecord(
-                video_id=video_id,
-                source_file=source_file,
-                start_frame=start_frame,
-                end_frame=end_exclusive - 1,
-                label=window_label,
-            )
-        )
-    return x_list, y_list, records
-
-
-def discover_npz_files(root: Path) -> List[Path]:
-    files = sorted(root.rglob("*.npz"))
-    if not files:
-        raise FileNotFoundError(f"No .npz files found under: {root}")
-    return files
-
-
-def load_all_windows(
-    data_root: Path,
-    window_size: int,
-    stride: int,
-    visibility_threshold: float,
-    missing_mode: str,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-    min_valid_frames: int = 1,
-    annotation_csv: Path = Path("data/urfall-cam0-falls.csv"),
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    x, y, groups, records = experiment_common.load_sequence_windows(
-        data_root=data_root,
-        window_size=window_size,
-        stride=stride,
-        visibility_threshold=visibility_threshold,
-        missing_mode=missing_mode,
-        feature_mode=feature_mode,
-        joint_indices=joint_indices,
-        min_valid_frames=min_valid_frames,
-        annotation_csv=annotation_csv,
-    )
-    return x.reshape(x.shape[0], x.shape[1], 33, 2), y, groups, records
-
 
 
 def make_loader(x: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
@@ -561,7 +385,7 @@ def _window_frame_bounds(records: pd.DataFrame, i: int, window_size: int):
         return start_frame, start_frame + window_size - 1
 
     raise RuntimeError(
-        "load_all_windows() 返回的 records 中缺少帧范围字段；"
+        "窗口缓存 records 中缺少帧范围字段；"
         "需要 start_frame/end_frame 或 window_start/window_end"
     )
 
@@ -809,24 +633,71 @@ def _patch_topo_for_numerical_stability(blockgcn_module) -> None:
     blockgcn_module.Topo.forward = forward_stable
 
 
-def load_official_blockgcn(blockgcn_root: Path):
+COCO17_BLOCKGCN_GRAPH = '''import numpy as np
+
+
+class Graph:
+    """COCO-17/VitPose graph adapter for the official BlockGCN code."""
+
+    def __init__(self, labeling_mode="spatial"):
+        self.num_node = 17
+        self.self_link = [(i, i) for i in range(self.num_node)]
+        inward_ori_index = [
+            (0, 1), (0, 2), (1, 3), (2, 4),
+            (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+            (5, 11), (6, 12), (11, 12),
+            (11, 13), (13, 15), (12, 14), (14, 16),
+        ]
+        self.inward = [(j, i) for (i, j) in inward_ori_index]
+        self.outward = [(j, i) for (i, j) in self.inward]
+        self.neighbor = self.inward + self.outward
+        self.A = self.get_adjacency_matrix(labeling_mode)
+
+    def get_adjacency_matrix(self, labeling_mode=None):
+        if labeling_mode is None:
+            return self.A
+        if labeling_mode != "spatial":
+            raise ValueError(labeling_mode)
+        adjacency = np.zeros((self.num_node, self.num_node), dtype=np.float32)
+        for i, j in self.self_link + self.neighbor:
+            adjacency[i, j] = 1
+        degree = adjacency.sum(axis=0)
+        degree[degree == 0] = 1
+        normalize_adjacency = adjacency / degree
+        return normalize_adjacency
+'''
+
+
+def ensure_blockgcn_graph_adapter(blockgcn_root: Path, graph_name: str) -> None:
+    if graph_name == "blazepose":
+        return
+    if graph_name != "coco17":
+        raise ValueError(f"Unsupported BlockGCN graph adapter: {graph_name}")
+    graph_dir = Path(blockgcn_root) / "graph"
+    graph_dir.mkdir(parents=True, exist_ok=True)
+    graph_file = graph_dir / "coco17.py"
+    if not graph_file.exists():
+        graph_file.write_text(COCO17_BLOCKGCN_GRAPH, encoding="utf-8")
+
+
+def load_official_blockgcn(blockgcn_root: Path, graph_name: str = "blazepose"):
     """Load the authors' official model and apply the UR-Fall one-person patch."""
     import importlib
     import sys
 
     root = Path(blockgcn_root).resolve()
     model_file = root / "model" / "BlockGCN.py"
-    graph_file = root / "graph" / "blazepose.py"
     if not model_file.exists():
         raise FileNotFoundError(
             f"Official BlockGCN model not found: {model_file}\n"
             "Clone https://github.com/ZhouYuxuanYX/BlockGCN.git to "
             "third_party/BlockGCN (or pass --blockgcn-root)."
         )
+    ensure_blockgcn_graph_adapter(root, graph_name)
+    graph_file = root / "graph" / f"{graph_name}.py"
     if not graph_file.exists():
         raise FileNotFoundError(
-            f"BlazePose graph adapter not found: {graph_file}\n"
-            "Copy the supplied blazepose.py to third_party/BlockGCN/graph/blazepose.py."
+            f"BlockGCN graph adapter not found: {graph_file}"
         )
 
     root_str = str(root)
@@ -844,11 +715,11 @@ def load_official_blockgcn(blockgcn_root: Path):
             del sys.modules[name]
 
     importlib.invalidate_caches()
-    graph_submodule = importlib.import_module("graph.blazepose")
+    graph_submodule = importlib.import_module(f"graph.{graph_name}")
     graph_package = importlib.import_module("graph")
     # Be explicit because the authors' import_class() walks attributes with
     # getattr(graph, "blazepose") rather than importing the dotted module.
-    setattr(graph_package, "blazepose", graph_submodule)
+    setattr(graph_package, graph_name, graph_submodule)
 
     try:
         module = importlib.import_module("model.BlockGCN")
@@ -871,9 +742,9 @@ def load_official_blockgcn(blockgcn_root: Path):
     module.import_class = _import_class_dotted
 
     # Fail early with a useful diagnostic instead of the opaque getattr error.
-    resolved_graph = module.import_class("graph.blazepose.Graph")
+    resolved_graph = module.import_class(f"graph.{graph_name}.Graph")
     if resolved_graph is None:
-        raise RuntimeError("Failed to resolve graph.blazepose.Graph")
+        raise RuntimeError(f"Failed to resolve graph.{graph_name}.Graph")
 
     _patch_structure_element_layer_for_safe_padding(module)
     _patch_topotrans_for_single_person(module)
@@ -882,14 +753,15 @@ def load_official_blockgcn(blockgcn_root: Path):
 
 
 class BlockGCNAdapter(nn.Module):
-    """Convert this project's [B,T,66] windows to official [N,C,T,V,M]."""
-    def __init__(self, model_cls, window_size: int, dropout: float):
+    """Convert this project's [B,T,V*2] windows to official [N,C,T,V,M]."""
+    def __init__(self, model_cls, window_size: int, dropout: float, joint_count: int, graph_name: str):
         super().__init__()
+        self.joint_count = joint_count
         self.model = model_cls(
             num_class=2,
-            num_point=33,
+            num_point=joint_count,
             num_person=1,
-            graph="graph.blazepose.Graph",
+            graph=f"graph.{graph_name}.Graph",
             graph_args={"labeling_mode": "spatial"},
             in_channels=2,
             drop_out=dropout,
@@ -898,8 +770,8 @@ class BlockGCNAdapter(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # [B,T,66] -> [B,2,T,33,1]
-        x5 = x.reshape(x.shape[0], x.shape[1], 33, 2)
+        # [B,T,V*2] -> [B,2,T,V,1]
+        x5 = x.reshape(x.shape[0], x.shape[1], self.joint_count, 2)
         x5 = x5.permute(0, 3, 1, 2).contiguous().unsqueeze(-1)
         dummy_y = torch.zeros(x5.shape[0], dtype=torch.long, device=x5.device)
         logits, _ = self.model(x5, dummy_y, x5)
@@ -921,7 +793,7 @@ def set_sgd_lr(optimizer, base_lr: float, epoch_index: int, warmup_epochs: int,
     return lr
 
 
-def train_fold(x, y, groups, args, device, model_cls, seed):
+def train_fold(x, y, groups, args, device, model_cls, seed, joint_count: int, graph_name: str):
     fit_idx, val_idx = inner_group_split_window_labels(y, groups, seed)
     mean, std = standardize(x, fit_idx)
     fit_x = ((x[fit_idx] - mean) / std).astype(np.float32)
@@ -930,7 +802,7 @@ def train_fold(x, y, groups, args, device, model_cls, seed):
     val_loader = make_loader(val_x, y[val_idx], args.batch_size, False)
 
     seed_everything(seed)
-    model = BlockGCNAdapter(model_cls, args.window_size, args.dropout).to(device)
+    model = BlockGCNAdapter(model_cls, args.window_size, args.dropout, joint_count, graph_name).to(device)
 
     counts = np.bincount(y[fit_idx], minlength=2)
     if np.any(counts == 0):
@@ -1103,6 +975,7 @@ def parse_args():
         description="Official BlockGCN on UR-Fall with BlazePose and video-grouped CV"
     )
     parser.add_argument("--data-root", type=Path, default=Path("data/keypoints"))
+    parser.add_argument("--windows-cache", type=Path, required=True)
     parser.add_argument(
         "--result-root", "--output-root", dest="result_root", type=Path,
         default=Path("results/blockgcn"),
@@ -1161,7 +1034,30 @@ def main():
 
     seed_everything(args.seed)
     device = choose_device(args.device)
-    model_cls, official_root = load_official_blockgcn(args.blockgcn_root)
+
+    x, y, groups, records, cache_config = experiment_common.load_windows_cache(
+        args.windows_cache
+    )
+    joint_count = int(cache_config.get("joint_count", x.shape[-1] // 2))
+    if x.shape[-1] != joint_count * 2:
+        raise ValueError(
+            f"BlockGCN expects XY features with D=joint_count*2, got D={x.shape[-1]} "
+            f"and joint_count={joint_count}"
+        )
+    if joint_count == 33:
+        graph_name = "blazepose"
+        graph_class = "graph.blazepose.Graph"
+        graph_description = "BlazePose 33-joint physical graph"
+        pose_extractor = "BlazePose"
+    elif joint_count == 17:
+        graph_name = "coco17"
+        graph_class = "graph.coco17.Graph"
+        graph_description = "COCO/VitPose 17-joint physical graph"
+        pose_extractor = "ViTPose"
+    else:
+        raise ValueError(f"BlockGCN only supports 33-joint BlazePose or 17-joint COCO/VitPose, got {joint_count}")
+
+    model_cls, official_root = load_official_blockgcn(args.blockgcn_root, graph_name)
 
     if args.result_root == Path("results/blockgcn"):
         output = Path("results") / dataset_run_name(args.data_root)
@@ -1179,19 +1075,9 @@ def main():
     print(f"Output dir: {output}")
     print(
         f"Input: window={args.window_size}, stride={args.stride}, "
-        "33 BlazePose joints, XY only, one person"
+        f"{joint_count} {pose_extractor} joints, XY only, one person"
     )
-
-    x, y, groups, records = load_all_windows(
-        args.data_root,
-        args.window_size,
-        args.stride,
-        args.visibility_threshold,
-        args.missing_mode,
-        "xy66",
-        None,
-        annotation_csv=args.annotation_csv,
-    )
+    x = x.reshape(x.shape[0], x.shape[1], joint_count, 2)
     split_y = video_type_labels(groups)
     group_df = pd.DataFrame({"group": groups, "video_type": split_y}).drop_duplicates("group")
     class_groups = np.bincount(group_df["video_type"].to_numpy(dtype=np.int64), minlength=2)
@@ -1209,13 +1095,14 @@ def main():
         "model_type": "BlockGCN (official CVPR 2024 implementation, UR-Fall adapter)",
         "official_model": "model.BlockGCN.Model",
         "official_repo": "https://github.com/ZhouYuxuanYX/BlockGCN",
-        "graph": "graph.blazepose.Graph",
+        "graph": graph_class,
         "num_class": 2,
-        "num_point": 33,
+        "num_point": joint_count,
         "num_person": 1,
         "in_channels": 2,
-        "feature_mode": "xy66",
-        "pose_extractor": "BlazePose",
+        "feature_mode": cache_config.get("feature_mode", f"xy{joint_count * 2}"),
+        "pose_extractor": pose_extractor,
+        "graph_description": graph_description,
         "topotrans_patch": "remove NTU two-person repeat(2,1)",
         "label_level": "window",
         "window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
@@ -1237,10 +1124,10 @@ def main():
         "=" * 80,
         f"official_root: {official_root}",
         f"data_root: {args.data_root}",
-        "feature_mode: xy66",
-        f"input_shape_per_window: [{args.window_size}, 33, 2]",
+        f"feature_mode: {cache_config.get('feature_mode', f'xy{joint_count * 2}')}",
+        f"input_shape_per_window: [{args.window_size}, {joint_count}, 2]",
         "num_person: 1",
-        "graph: BlazePose 33-joint physical graph",
+        f"graph: {graph_description}",
         "topotrans_patch: remove official NTU two-person repeat(2,1)",
         f"missing_mode: {args.missing_mode}",
         f"visibility_threshold: {args.visibility_threshold}",
@@ -1281,7 +1168,7 @@ def main():
             model, mean, std, best_epoch, val_f1, history, _, seconds
         ) = train_fold(
             x[train_idx], y[train_idx], groups[train_idx],
-            args, device, model_cls, args.seed + fold,
+            args, device, model_cls, args.seed + fold, joint_count, graph_name,
         )
 
         test_x = ((x[test_idx] - mean) / std).astype(np.float32)
@@ -1341,15 +1228,16 @@ def main():
             "model_type": "blockgcn_official_urfall",
             "official_model": "model.BlockGCN.Model",
             "num_class": 2,
-            "num_point": 33,
+            "num_point": joint_count,
             "num_person": 1,
             "in_channels": 2,
+            "graph": graph_class,
             "state_dict": model.state_dict(),
             "feature_mean": mean,
             "feature_std": std,
             "best_epoch": best_epoch,
             "val_f1": val_f1,
-            "pose_extractor": "BlazePose",
+            "pose_extractor": pose_extractor,
             "args": checkpoint_args,
         }, models_dir / f"fold_{fold}.pt")
         pd.DataFrame(history).to_csv(

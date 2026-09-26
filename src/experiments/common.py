@@ -57,6 +57,31 @@ class WindowRecord:
     label: int
 
 
+@dataclass(frozen=True)
+class KeypointAdapter:
+    name: str
+    default_confidence_index: Optional[int]
+    expected_joints: Optional[int]
+    confidence_fields: Tuple[str, ...] = ("scores", "keypoint_scores")
+
+
+KEYPOINT_ADAPTERS: Dict[str, KeypointAdapter] = {
+    "auto": KeypointAdapter("auto", default_confidence_index=None, expected_joints=None),
+    "generic": KeypointAdapter("generic", default_confidence_index=None, expected_joints=None),
+    "blazepose": KeypointAdapter("blazepose", default_confidence_index=3, expected_joints=33),
+    "vitpose": KeypointAdapter("vitpose", default_confidence_index=-1, expected_joints=17),
+    "openpose": KeypointAdapter("openpose", default_confidence_index=2, expected_joints=25),
+}
+
+
+def get_keypoint_adapter(name: str) -> KeypointAdapter:
+    key = name.strip().lower()
+    if key not in KEYPOINT_ADAPTERS:
+        available = ", ".join(sorted(KEYPOINT_ADAPTERS))
+        raise ValueError(f"未知 keypoint adapter: {name!r}; 可选值：{available}")
+    return KEYPOINT_ADAPTERS[key]
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -218,6 +243,8 @@ def preprocess_keypoints(
     visibility_threshold: float,
     missing_mode: str,
     expected_joints: Optional[int] = 33,
+    scores: Optional[np.ndarray] = None,
+    confidence_index: Optional[int] = None,
 ) -> np.ndarray:
     """返回清洗后的 x/y 关键点，形状为 [T,J,2]。"""
     if keypoints.ndim != 3 or keypoints.shape[2] < 2:
@@ -230,8 +257,26 @@ def preprocess_keypoints(
     xy = keypoints[..., :2].astype(np.float32, copy=True)
     joint_valid = np.isfinite(xy).all(axis=-1)
 
-    if keypoints.shape[2] >= 4:
+    if scores is not None:
+        visibility = np.asarray(scores, dtype=np.float32)
+        if visibility.shape != keypoints.shape[:2]:
+            raise ValueError(
+                f"scores 形状应为 {keypoints.shape[:2]}，实际为 {visibility.shape}"
+            )
+    elif confidence_index is not None:
+        channels = keypoints.shape[2]
+        index = confidence_index if confidence_index >= 0 else channels + confidence_index
+        if index < 0 or index >= channels:
+            raise ValueError(f"confidence_index={confidence_index} 超出 C={channels}")
+        visibility = keypoints[..., index]
+    elif keypoints.shape[2] >= 4:
         visibility = keypoints[..., 3]
+    elif keypoints.shape[2] >= 3:
+        visibility = keypoints[..., -1]
+    else:
+        visibility = None
+
+    if visibility is not None:
         joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
 
     if valid_mask is not None:
@@ -260,6 +305,67 @@ def preprocess_keypoints(
     return xy.astype(np.float32)
 
 
+def adapt_keypoints_from_npz(
+    data: Any,
+    adapter: str = "auto",
+    visibility_threshold: float = 0.3,
+    missing_mode: str = "mask",
+    confidence_index: Optional[int] = None,
+) -> Tuple[np.ndarray, Optional[np.ndarray], int, str]:
+    """读取一个 NPZ 的关键点字段，并按指定姿态估计器转换为 [T,J,2]。
+
+    支持的最低约定是存在 keypoints=[T,J,C>=2]。VitPose 一类输出可以把置信度
+    放在 keypoints 最后一维，也可以额外保存 scores/keypoint_scores=[T,J]。
+    """
+    if "keypoints" not in data:
+        raise KeyError("missing 'keypoints'")
+
+    spec = get_keypoint_adapter(adapter)
+    keypoints = np.asarray(data["keypoints"])
+    valid_mask = data["valid_mask"] if "valid_mask" in data else None
+    scores = None
+    for field in spec.confidence_fields:
+        if field in data:
+            scores = np.asarray(data[field])
+            break
+
+    selected_confidence_index = (
+        confidence_index
+        if confidence_index is not None
+        else spec.default_confidence_index
+    )
+    expected_joints = spec.expected_joints if spec.name != "auto" else None
+    xy = preprocess_keypoints(
+        keypoints=keypoints,
+        valid_mask=valid_mask,
+        visibility_threshold=visibility_threshold,
+        missing_mode=missing_mode,
+        expected_joints=expected_joints,
+        scores=scores,
+        confidence_index=selected_confidence_index,
+    )
+    return xy, valid_mask, int(xy.shape[1]), spec.name
+
+
+def fill_missing_temporally(
+    values: np.ndarray,
+    missing_mode: str = "interp",
+) -> np.ndarray:
+    """对一个窗口内的缺失值做统一处理，支持 [T,D] 或 [T,J,C]。"""
+    out = values.astype(np.float32, copy=True)
+    if missing_mode in ("interp", "interpolate"):
+        if out.ndim < 2:
+            return interpolate_1d(out)
+        flat = out.reshape(out.shape[0], -1)
+        for feature_idx in range(flat.shape[1]):
+            flat[:, feature_idx] = interpolate_1d(flat[:, feature_idx])
+        out = flat.reshape(out.shape)
+        return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    if missing_mode == "zero":
+        return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    raise ValueError(f"未知 missing_mode：{missing_mode}")
+
+
 def build_frame_features(
     xy: np.ndarray,
     feature_mode: str,
@@ -269,16 +375,18 @@ def build_frame_features(
     if xy.ndim != 3 or xy.shape[2] != 2:
         raise ValueError(f"期望 xy 形状为 [T,J,2]，实际为 {xy.shape}")
 
-    if feature_mode in ("xy", "xy66"):
+    if feature_mode in ("xy", "xy66", "xy_flat"):
         return xy.reshape(xy.shape[0], -1).astype(np.float32)
 
-    if feature_mode == "joints16":
-        if joint_indices is None or len(joint_indices) != 8:
+    if feature_mode in ("joints", "joints16"):
+        if joint_indices is None:
+            raise ValueError(f"{feature_mode} 需要 --joint-indices")
+        if feature_mode == "joints16" and len(joint_indices) != 8:
             raise ValueError("joints16 需要正好 8 个关节索引")
         idx = np.asarray(joint_indices, dtype=np.int64)
         if np.any(idx < 0) or np.any(idx >= xy.shape[1]):
             raise ValueError(f"所有关节索引必须位于 [0, {xy.shape[1] - 1}]")
-        return xy[:, idx, :].reshape(xy.shape[0], 16).astype(np.float32)
+        return xy[:, idx, :].reshape(xy.shape[0], len(idx) * 2).astype(np.float32)
 
     raise ValueError(f"未知 feature_mode：{feature_mode}")
 
@@ -300,7 +408,9 @@ def load_sequence_windows(
     joint_indices: Optional[Sequence[int]] = None,
     min_valid_frames: int = 1,
     annotation_csv: Path = FALL_ANNOTATION_CSV,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
+    keypoint_adapter: str = "blazepose",
+    confidence_index: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame, Dict[str, Any]]:
     """从 NPZ 目录加载统一的 [N,T,D] 滑动窗口数据。
 
     该函数对应 LSTM/MLP/Transformer 一类时序实验的公共数据管线。
@@ -318,11 +428,6 @@ def load_sequence_windows(
 
     for path in files:
         with np.load(path, allow_pickle=True) as data:
-            if "keypoints" not in data:
-                raise KeyError(f"{path}: missing 'keypoints'")
-
-            keypoints = data["keypoints"]
-            valid_mask = data["valid_mask"] if "valid_mask" in data else None
             label_data = data["label"] if "label" in data else path.parent.name
 
             if "video_id" in data:
@@ -335,7 +440,14 @@ def load_sequence_windows(
             else:
                 video_id = path.stem
 
-            frame_count = keypoints.shape[0]
+            xy, valid_mask, joint_count, resolved_adapter = adapt_keypoints_from_npz(
+                data,
+                adapter=keypoint_adapter,
+                visibility_threshold=visibility_threshold,
+                missing_mode="mask",
+                confidence_index=confidence_index,
+            )
+            frame_count = xy.shape[0]
             if "frame_indices" in data:
                 frame_indices = np.asarray(data["frame_indices"]).reshape(-1)
             else:
@@ -362,12 +474,6 @@ def load_sequence_windows(
                     f"{video_id} -> {sequence_name} 在 {annotation_csv} 中没有逐帧标注"
                 )
 
-        xy = preprocess_keypoints(
-            keypoints=keypoints,
-            valid_mask=valid_mask,
-            visibility_threshold=visibility_threshold,
-            missing_mode="mask",
-        )
         features = build_frame_features(
             xy=xy,
             feature_mode=feature_mode,
@@ -413,7 +519,55 @@ def load_sequence_windows(
         f"short_videos_skipped={skipped_short} | "
         f"no_valid_windows_skipped={skipped_no_valid_windows}"
     )
-    return x, y, groups, records
+    if feature_mode in ("xy", "xy66", "xy_flat"):
+        output_joint_count = int(x.shape[-1] // 2)
+    elif joint_indices is not None:
+        output_joint_count = len(joint_indices)
+    else:
+        output_joint_count = int(joint_count)
+    metadata = {
+        "keypoint_adapter": resolved_adapter,
+        "joint_count": output_joint_count,
+        "feature_dim": int(x.shape[-1]),
+    }
+    return x, y, groups, records, metadata
+
+
+def save_windows_cache(
+    output: Path,
+    x: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    records: pd.DataFrame,
+    config: Optional[Dict[str, Any]] = None,
+) -> None:
+    """保存统一滑动窗口缓存，供所有实验复用。"""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output,
+        x=x.astype(np.float32),
+        y=y.astype(np.int64),
+        groups=np.asarray(groups).astype(str),
+        records_json=records.to_json(orient="records", force_ascii=False),
+        config_json=json.dumps(config or {}, ensure_ascii=False),
+    )
+
+
+def load_windows_cache(cache_path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame, Dict[str, Any]]:
+    """读取 prepare_windows.py 生成的统一滑动窗口缓存。"""
+    cache_path = Path(cache_path)
+    if not cache_path.exists():
+        raise FileNotFoundError(f"找不到窗口缓存：{cache_path}")
+    with np.load(cache_path, allow_pickle=False) as data:
+        x = data["x"].astype(np.float32)
+        y = data["y"].astype(np.int64)
+        groups = data["groups"].astype(str)
+        records_json = str(data["records_json"].item())
+        config_json = str(data["config_json"].item())
+    records = pd.read_json(records_json, orient="records")
+    config = json.loads(config_json) if config_json else {}
+    return x, y, groups, records, config
 
 
 def make_urfall_windows(
@@ -465,14 +619,7 @@ def make_urfall_windows(
                 continue
             y_win = int(y_from_csv)
 
-        x_win = features[start:end].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(x_win.shape[1]):
-                x_win[:, feature_idx] = interpolate_1d(x_win[:, feature_idx])
-        elif missing_mode == "zero":
-            x_win = np.nan_to_num(x_win, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"未知 missing_mode：{missing_mode}")
+        x_win = fill_missing_temporally(features[start:end], missing_mode)
 
         x_list.append(x_win.astype(np.float32))
         y_list.append(y_win)
@@ -750,6 +897,58 @@ def save_metrics_json(
     )
 
 
+def save_experiment_metrics_json(
+    output: Path,
+    model: str,
+    data_root: Path,
+    overall: Dict[str, Any],
+    fold_rows: Sequence[Dict[str, Any]] | pd.DataFrame,
+    device: Optional[Any] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    metric_columns: Sequence[str] = (
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "roc_auc",
+        "tn",
+        "fp",
+        "fn",
+        "tp",
+    ),
+    filename: str = "metrics.json",
+) -> Dict[str, Any]:
+    """保存各实验统一结构的 JSON 指标汇总。"""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    fold_frame = (
+        fold_rows.copy()
+        if isinstance(fold_rows, pd.DataFrame)
+        else pd.DataFrame(list(fold_rows))
+    )
+    available_metrics = [column for column in metric_columns if column in fold_frame]
+
+    summary: Dict[str, Any] = {
+        "model": model,
+        "data_root": str(data_root),
+        "output_dir": str(output),
+        "overall": dict(overall),
+        "fold_mean": fold_frame[available_metrics].mean(numeric_only=True).to_dict(),
+        "fold_std": fold_frame[available_metrics]
+        .std(numeric_only=True, ddof=1)
+        .fillna(0)
+        .to_dict(),
+        "folds": fold_frame.to_dict(orient="records"),
+    }
+    if device is not None:
+        summary["device"] = str(device)
+    if extra:
+        summary.update(extra)
+
+    save_metrics_json(output, summary, filename=filename)
+    return summary
+
+
 def metrics_from_prediction_frame(
     prediction_frame: pd.DataFrame,
     label_column: str = "label",
@@ -803,6 +1002,112 @@ def metrics_text_block(
     lines = [title]
     lines.extend(f"{key}: {value}" for key, value in metrics.items())
     return "\n".join(lines)
+
+
+def save_experiment_metrics_text(
+    output: Path,
+    model: str,
+    header: Sequence[str],
+    fold_rows: Sequence[Dict[str, Any]] | pd.DataFrame,
+    overall: Dict[str, Any],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    confusion: Optional[np.ndarray] = None,
+    filename: str = "metrics.txt",
+    metric_keys: Sequence[str] = (
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "roc_auc",
+        "tn",
+        "fp",
+        "fn",
+        "tp",
+    ),
+    fold_extra_keys: Sequence[str] = (
+        "train_videos",
+        "test_videos",
+        "train_windows",
+        "test_windows",
+        "best_epoch",
+        "val_f1",
+    ),
+) -> str:
+    """保存统一格式的 metrics.txt，并返回写入的文本。"""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    fold_frame = (
+        fold_rows.copy()
+        if isinstance(fold_rows, pd.DataFrame)
+        else pd.DataFrame(list(fold_rows))
+    )
+    cm = confusion if confusion is not None else confusion_matrix(y_true, y_pred, labels=[0, 1])
+    report = classification_report_text(y_true, y_pred)
+
+    lines = ["=" * 80, f"MODEL: {model.upper()}", "=" * 80]
+    lines.extend(str(item) for item in header)
+    lines.append("")
+
+    for _, row in fold_frame.iterrows():
+        fold = row.get("fold", "?")
+        total_folds = len(fold_frame)
+        lines.append(f"[Fold {fold}/{total_folds}]")
+        for key in fold_extra_keys:
+            if key in fold_frame.columns:
+                lines.append(f"{key}: {fmt_metric(row[key])}")
+        for key in metric_keys:
+            if key in fold_frame.columns:
+                lines.append(f"{key}: {fmt_metric(row[key])}")
+        lines.append("")
+
+    lines.extend(["=" * 80, "OVERALL OUT-OF-FOLD METRICS", "=" * 80])
+    lines.extend(f"{key}: {fmt_metric(overall[key])}" for key in metric_keys if key in overall)
+    lines.extend(
+        [
+            "",
+            "Classification report:",
+            report,
+            "Confusion matrix [[TN, FP], [FN, TP]]:",
+            np.array2string(cm),
+            "",
+            "Fold mean +/- std:",
+        ]
+    )
+    for key in ("accuracy", "precision", "recall", "f1", "roc_auc"):
+        if key in fold_frame.columns:
+            lines.append(
+                f"{key}: {fold_frame[key].mean():.6f} +/- "
+                f"{fold_frame[key].std(ddof=1):.6f}"
+            )
+
+    text = "\n".join(lines)
+    (output / filename).write_text(text, encoding="utf-8")
+    return text
+
+
+def save_summary_metrics_text(
+    output: Path,
+    title: str,
+    summary: Dict[str, Any],
+    filename: str = "metrics.txt",
+) -> str:
+    """保存嵌套 summary 字典为简洁文本指标文件。"""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    lines = [title, "=" * 60]
+    for key, value in summary.items():
+        if isinstance(value, dict):
+            lines.extend(["", str(key)])
+            lines.extend(
+                f"{inner_key}: {inner_value}"
+                for inner_key, inner_value in value.items()
+            )
+        else:
+            lines.append(f"{key}: {value}")
+    text = "\n".join(lines) + "\n"
+    (output / filename).write_text(text, encoding="utf-8")
+    return text
 
 
 def save_binary_classification_outputs(

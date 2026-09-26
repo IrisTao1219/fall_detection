@@ -25,6 +25,7 @@ import torch
 from sklearn.model_selection import StratifiedGroupKFold
 from torch import nn
 
+import common as experiment_common
 from common import (
     WindowRecord,
     aggregate_video_predictions,
@@ -45,6 +46,7 @@ from common import (
     save_experiment_config,
     save_metrics_json,
     save_seed_summary_outputs,
+    save_summary_metrics_text,
     seed_metric_summary,
     tune_threshold,
     video_type_labels,
@@ -163,127 +165,6 @@ def _pose_features(
     return np.concatenate(parts, axis=-1).reshape(frames, -1), frame_valid, joints
 
 
-def load_pose_windows(args) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame, int]:
-    windows: list[np.ndarray] = []
-    labels: list[int] = []
-    groups: list[str] = []
-    records: list[WindowRecord] = []
-    joint_count: int | None = None
-    files = discover_npz_files(args.data_root)
-    fall_annotations = load_fall_frame_labels(args.annotation_csv)
-    skipped_short = 0
-    skipped_no_valid_windows = 0
-
-    for path in files:
-        with np.load(path, allow_pickle=True) as data:
-            if "keypoints" not in data:
-                raise KeyError(f"{path}: missing keypoints")
-            keypoints = data["keypoints"]
-            scores = data["scores"] if "scores" in data else None
-            valid_mask = data["valid_mask"] if "valid_mask" in data else None
-            label = data["label"] if "label" in data else path.parent.name
-            video_id = _video_id(data, path)
-            frame_count = keypoints.shape[0]
-            if "frame_indices" in data:
-                frame_indices = np.asarray(data["frame_indices"]).reshape(-1)
-            else:
-                # UR-Fall 官方帧号从 1 开始。
-                frame_indices = np.arange(1, frame_count + 1, dtype=np.int64)
-
-        features, frame_valid, joints = _pose_features(
-            keypoints,
-            scores,
-            valid_mask,
-            args.visibility_threshold,
-            args.feature_mode,
-            args.confidence_index,
-        )
-        if joint_count is None:
-            joint_count = joints
-        elif joints != joint_count:
-            raise ValueError(
-                f"All files in one run must use the same joint count: "
-                f"expected {joint_count}, found {joints} in {path}"
-            )
-
-        sequence_name = canonical_sequence_name(video_id)
-        if sequence_name is None:
-            sequence_name = canonical_sequence_name(path.stem)
-        if sequence_name is not None:
-            video_level_label = 1 if sequence_name.startswith("fall-") else 0
-        else:
-            video_level_label = normalize_label(label)
-
-        sequence_annotations: Optional[Dict[int, int]] = None
-        if video_level_label == 1:
-            if sequence_name is None:
-                raise RuntimeError(
-                    f"Cannot parse UR-Fall sequence name from {video_id} / {path.name}"
-                )
-            sequence_annotations = fall_annotations.get(sequence_name)
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"{video_id} -> {sequence_name} has no frame annotations in "
-                    f"{args.annotation_csv}"
-                )
-
-        # 与当前 RF/MLP/LSTM/ST-GCN 实验保持一致：窗口有效性优先使用
-        # NPZ 的帧级 valid_mask；如果没有该字段，再退回到由有限坐标和置信度
-        # 推断出的 frame_valid。
-        window_valid_mask = (
-            np.asarray(valid_mask).reshape(-1).astype(bool)
-            if valid_mask is not None
-            else frame_valid
-        )
-        x_list, y_list, recs = make_urfall_windows(
-            features=features,
-            video_level_label=video_level_label,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=args.window_size,
-            stride=args.stride,
-            frame_indices=frame_indices,
-            sequence_annotations=sequence_annotations,
-            valid_mask=window_valid_mask,
-            min_valid_frames=args.min_valid_frames,
-            missing_mode=args.missing_mode,
-        )
-        if frame_count < args.window_size:
-            skipped_short += 1
-            continue
-        if not x_list:
-            skipped_no_valid_windows += 1
-            continue
-        windows.extend(x_list)
-        labels.extend(y_list)
-        groups.extend([video_id] * len(x_list))
-        records.extend(recs)
-
-    if not windows or joint_count is None:
-        raise RuntimeError("No valid windows were generated")
-    x = np.stack(windows).astype(np.float32)
-    y = np.asarray(labels, dtype=np.int64)
-    group_array = np.asarray(groups)
-    record_frame = pd.DataFrame([asdict(record) for record in records])
-    print(
-        f"Loaded {len(files)} videos | windows={len(x)} | shape={x.shape} | "
-        f"joints={joint_count} | ADL={(y == 0).sum()} | Fall={(y == 1).sum()} | "
-        f"short_videos_skipped={skipped_short} | "
-        f"no_valid_windows_skipped={skipped_no_valid_windows}"
-    )
-    print(
-        "UR-Fall reference for the current 30-frame/stride-1 setup: "
-        "8963 windows = 8080 ADL + 883 Fall."
-    )
-    if args.window_size == 30 and args.stride == 1:
-        if len(x) != 8963 or int((y == 0).sum()) != 8080 or int((y == 1).sum()) != 883:
-            print(
-                "WARNING: window counts differ from the current reference experiment. "
-                "Check frame_indices, NPZ files, valid_mask, and annotation CSV before "
-                "comparing metrics directly."
-            )
-    return x, y, group_array, record_frame, joint_count
-
 
 def train_fold(x, y, groups, args, device, seed):
     fit_idx, val_idx = inner_group_split_by_video_type(y, groups, seed)
@@ -393,6 +274,7 @@ def parse_args():
         description="Video-grouped temporal Transformer fall detection experiment"
     )
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--windows-cache", type=Path, required=True)
     parser.add_argument(
         "--annotation-csv",
         type=Path,
@@ -477,7 +359,10 @@ def main():
 
     device = choose_device(args.device)
     seed_everything(args.split_seed)
-    x, y, groups, records, joint_count = load_pose_windows(args)
+    x, y, groups, records, cache_config = experiment_common.load_windows_cache(
+        args.windows_cache
+    )
+    joint_count = int(cache_config.get("joint_count", x.shape[-1] // 2))
     # 一个 fall 视频现在可能同时包含 ADL/Fall 窗口，因此外层 fold 按原始
     # UR-Fall 视频类型分层，训练和评估仍使用窗口级 y。
     split_y = video_type_labels(groups)
@@ -635,6 +520,7 @@ def main():
         **seed_metric_summary(seed_frame),
     }
     save_metrics_json(output, summary)
+    save_summary_metrics_text(output, "TRANSFORMER SUMMARY", summary)
     save_experiment_config(output, args, {"output_dir": str(output)})
     print(f"Results: {output}")
 
