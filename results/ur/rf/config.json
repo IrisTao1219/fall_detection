@@ -1,0 +1,29 @@
+{
+    "experiment_name": "rf",
+    "data_root": "data/keypoints_ur",
+    "fall_annotation_csv": "data/urfall-cam0-falls.csv",
+    "window_label_strategy": "UR-Fall frame labels: ignore 0, majority vote -1 vs 1",
+    "result_dir": "results_ur/rf",
+    "normalized_input": false,
+    "coordinate_field": "keypoints",
+    "coordinate_channels": [
+        0,
+        1
+    ],
+    "visibility_filter": true,
+    "visibility_threshold": 0.3,
+    "fps": 30.0,
+    "window_seconds": 1.0,
+    "window_size_frames": 45,
+    "window_stride": 1,
+    "missing_value_strategy": "interpolate",
+    "number_of_videos": 70,
+    "number_of_windows": 541,
+    "feature_dimension": 2970,
+    "folds": 5,
+    "random_state": 42,
+    "n_estimators": 500,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "n_jobs": 8
+}

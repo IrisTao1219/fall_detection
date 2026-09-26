@@ -10,6 +10,7 @@
 示例：
     python src/print.py
     python src/print.py --format markdown
+    python src/print.py --format markdown --output results_summary.md
     python src/print.py --roots results results_normalized --sort-by f1
 """
 
@@ -384,17 +385,24 @@ def print_text_table(rows: List[Dict[str, Any]]) -> None:
         print(" ".join(row[column].ljust(widths[column]) for column in DISPLAY_COLUMNS))
 
 
-def print_markdown_table(rows: List[Dict[str, Any]]) -> None:
-    """打印 Markdown 表格。"""
+def markdown_table(rows: List[Dict[str, Any]]) -> str:
+    """生成 Markdown 表格。"""
     if not rows:
-        print("没有找到可汇总的实验结果。")
-        return
+        return "没有找到可汇总的实验结果。\n"
 
     output = stringify_rows(rows)
-    print("| " + " | ".join(DISPLAY_COLUMNS) + " |")
-    print("| " + " | ".join("---" for _ in DISPLAY_COLUMNS) + " |")
+    lines = [
+        "| " + " | ".join(DISPLAY_COLUMNS) + " |",
+        "| " + " | ".join("---" for _ in DISPLAY_COLUMNS) + " |",
+    ]
     for row in output:
-        print("| " + " | ".join(row[column] for column in DISPLAY_COLUMNS) + " |")
+        lines.append("| " + " | ".join(row[column] for column in DISPLAY_COLUMNS) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def print_markdown_table(rows: List[Dict[str, Any]]) -> None:
+    """打印 Markdown 表格。"""
+    print(markdown_table(rows), end="")
 
 
 def print_csv_table(rows: List[Dict[str, Any]]) -> None:
@@ -445,6 +453,49 @@ def print_best_by_root(rows: List[Dict[str, Any]], sort_by: str) -> None:
         print(" ".join(str(row[column]).ljust(widths[column]) for column in columns))
 
 
+def best_by_root_markdown(rows: List[Dict[str, Any]], sort_by: str) -> str:
+    """生成各结果根目录最佳结果的 Markdown 表格。"""
+    if not rows:
+        return ""
+    window_rows = [
+        row for row in rows
+        if re.search("window|overall", str(row.get("scope", "")), flags=re.IGNORECASE)
+    ]
+    if not window_rows:
+        return ""
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in window_rows:
+        root_name = str(row["result"]).split("/")[0]
+        grouped.setdefault(root_name, []).append(row)
+
+    best_rows = []
+    for root_name, group in grouped.items():
+        best = max(group, key=lambda row: safe_float(row.get(sort_by)))
+        best_rows.append(
+            {
+                "root": root_name,
+                "result": best["result"],
+                "accuracy": format_number(best["accuracy"]),
+                "precision": format_number(best["precision"]),
+                "recall": format_number(best["recall"]),
+                "f1": format_number(best["f1"]),
+                "roc_auc": format_number(best["roc_auc"]),
+            }
+        )
+    best_rows = sorted(best_rows, key=lambda row: safe_float(row[sort_by]), reverse=True)
+    columns = ["root", "result"] + METRIC_COLUMNS
+    lines = [
+        "## 各结果根目录最佳结果",
+        "",
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    for row in best_rows:
+        lines.append("| " + " | ".join(str(row[column]) for column in columns) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="打印 fall_detection 实验结果汇总")
     parser.add_argument(
@@ -473,6 +524,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出格式",
     )
     parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="把结果写入文件。markdown 格式未指定时默认写 results_summary.md",
+    )
+    parser.add_argument(
         "--no-best",
         action="store_true",
         help="不打印各结果根目录最佳结果",
@@ -487,7 +544,26 @@ def main() -> None:
     display = prepare_display(frame, args.sort_by, args.scope)
 
     if args.format == "markdown":
-        print_markdown_table(display)
+        content_lines = [
+            "# Fall Detection 实验结果汇总",
+            "",
+            f"- 排序指标：`{args.sort_by}`",
+            f"- 结果粒度：`{args.scope}`",
+            "",
+            "## 全部结果",
+            "",
+            markdown_table(display).rstrip(),
+            "",
+        ]
+        if not args.no_best:
+            best_section = best_by_root_markdown(frame, args.sort_by).rstrip()
+            if best_section:
+                content_lines.extend([best_section, ""])
+        content = "\n".join(content_lines).rstrip() + "\n"
+        output_path = args.output or Path("results_summary.md")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
+        print(f"Saved Markdown summary: {output_path}")
     elif args.format == "csv":
         print_csv_table(display)
     else:
