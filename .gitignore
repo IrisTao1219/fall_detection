@@ -1,7 +1,7 @@
 /data/raw*
 /data/keypoints
 /data/keypoints_normalized
-/data/pose
+/data/pose*
 .venv*
 models/
 __pycache__/
