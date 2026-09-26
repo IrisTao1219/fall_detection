@@ -383,29 +383,37 @@ class RecurrentClassifier(nn.Module):
 
 def train_one_model(
     model: nn.Module,
-    loader: DataLoader,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    y_val: np.ndarray,
     device: torch.device,
     epochs: int,
+    patience: int,
     learning_rate: float,
     weight_decay: float,
     grad_clip: float,
-) -> List[float]:
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
+    class_weights: torch.Tensor,
+) -> Tuple[List[Dict[str, float]], int, float]:
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=learning_rate,
         weight_decay=weight_decay,
     )
 
     model.to(device)
-    history: List[float] = []
+    history: List[Dict[str, float]] = []
+    best_state: Optional[Dict[str, torch.Tensor]] = None
+    best_epoch = 0
+    best_f1 = -1.0
+    best_loss = float("inf")
 
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         seen = 0
 
-        for xb, yb in loader:
+        for xb, yb in train_loader:
             xb = xb.to(device)
             yb = yb.to(device)
 
@@ -424,12 +432,43 @@ def train_one_model(
             seen += batch_n
 
         epoch_loss = running_loss / max(seen, 1)
-        history.append(epoch_loss)
+        _, val_prob = predict(model, val_loader, device)
+        val_pred = (val_prob >= 0.5).astype(np.int64)
+        val_f1 = compute_metrics(y_val, val_pred, val_prob)["f1"]
+        history.append(
+            {
+                "epoch": float(epoch),
+                "train_loss": float(epoch_loss),
+                "val_f1": float(val_f1),
+            }
+        )
+
+        if val_f1 > best_f1 or (val_f1 == best_f1 and epoch_loss < best_loss):
+            best_f1 = float(val_f1)
+            best_loss = float(epoch_loss)
+            best_epoch = epoch
+            best_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
 
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs:
-            print(f"    epoch {epoch:03d}/{epochs} | train_loss={epoch_loss:.6f}")
+            print(
+                f"    epoch {epoch:03d}/{epochs} | "
+                f"train_loss={epoch_loss:.6f} | val_f1={val_f1:.6f}"
+            )
 
-    return history
+        if epoch - best_epoch >= patience:
+            print(
+                f"    early stop at epoch {epoch:03d}; "
+                f"best_epoch={best_epoch}, best_val_f1={best_f1:.6f}"
+            )
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return history, best_epoch, best_f1
 
 
 @torch.no_grad()
@@ -568,8 +607,9 @@ def run_model_cv(
         "urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1",
         f"feature_mode: {args.feature_mode}",
         f"input_dim: {X.shape[-1]}",
-        f"window_size: {args.window_size}",
-        f"stride: {args.stride}",
+        f"window_size: {X.shape[1]}",
+        f"configured_window_size: {args.window_size}",
+        f"configured_stride: {args.stride}",
         f"missing_mode: {args.missing_mode}",
         f"min_valid_frames: {args.min_valid_frames}",
         f"visibility_threshold: {args.visibility_threshold}",
@@ -577,9 +617,12 @@ def run_model_cv(
         f"num_layers: {args.num_layers}",
         f"dropout: {args.dropout}",
         f"epochs: {args.epochs}",
+        f"patience: {args.patience}",
         f"batch_size: {args.batch_size}",
         f"learning_rate: {args.learning_rate}",
         f"weight_decay: {args.weight_decay}",
+        f"threshold_objective: {args.threshold_objective}",
+        f"min_recall: {args.min_recall}",
         f"folds: {n_splits}",
         f"seed: {args.seed}",
         f"device: {device}",
@@ -603,16 +646,45 @@ def run_model_cv(
 
         # Fit standardizer ONLY on this fold's training data.
         scaler = SequenceStandardizer.fit(X[train_idx])
-        X_train = scaler.transform(X[train_idx])
+        X_train_all = scaler.transform(X[train_idx])
         X_test = scaler.transform(X[test_idx])
 
-        y_train = y[train_idx]
+        y_train_all = y[train_idx]
         y_test = y[test_idx]
+        train_groups_array = groups[train_idx]
+
+        fit_idx, val_idx = experiment_common.inner_group_split_by_video_type(
+            y_train_all,
+            train_groups_array,
+            seed=args.seed + fold,
+        )
+        X_fit = X_train_all[fit_idx]
+        y_fit = y_train_all[fit_idx]
+        X_val = X_train_all[val_idx]
+        y_val = y_train_all[val_idx]
+
+        counts = np.bincount(y_fit, minlength=2)
+        if np.any(counts == 0):
+            raise RuntimeError(
+                f"Fold {fold}: inner training split is missing a class: {counts.tolist()}"
+            )
+        class_weights = torch.tensor(
+            len(y_fit) / (2.0 * counts),
+            dtype=torch.float32,
+            device=device,
+        )
 
         train_loader = DataLoader(
-            WindowDataset(X_train, y_train),
+            WindowDataset(X_fit, y_fit),
             batch_size=args.batch_size,
             shuffle=True,
+            num_workers=0,
+            drop_last=False,
+        )
+        val_loader = DataLoader(
+            WindowDataset(X_val, y_val),
+            batch_size=args.batch_size,
+            shuffle=False,
             num_workers=0,
             drop_last=False,
         )
@@ -634,23 +706,41 @@ def run_model_cv(
             num_classes=2,
         )
 
-        history = train_one_model(
+        history, best_epoch, best_val_f1 = train_one_model(
             model=model,
-            loader=train_loader,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            y_val=y_val,
             device=device,
             epochs=args.epochs,
+            patience=args.patience,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             grad_clip=args.grad_clip,
+            class_weights=class_weights,
         )
 
-        y_pred, y_prob = predict(model, test_loader, device)
+        _, val_prob = predict(model, val_loader, device)
+        threshold, threshold_metrics = experiment_common.tune_threshold(
+            y_val,
+            val_prob,
+            objective=args.threshold_objective,
+            min_recall=args.min_recall,
+        )
+        _, y_prob = predict(model, test_loader, device)
+        y_pred = (y_prob >= threshold).astype(np.int64)
         fold_metrics = compute_metrics(y_test, y_pred, y_prob)
         fold_metrics["fold"] = fold
         fold_metrics["train_videos"] = len(train_groups)
         fold_metrics["test_videos"] = len(test_groups)
         fold_metrics["train_windows"] = len(train_idx)
         fold_metrics["test_windows"] = len(test_idx)
+        fold_metrics["fit_windows"] = len(fit_idx)
+        fold_metrics["val_windows"] = len(val_idx)
+        fold_metrics["best_epoch"] = best_epoch
+        fold_metrics["val_f1"] = best_val_f1
+        fold_metrics["threshold"] = threshold
+        fold_metrics["threshold_val_f1"] = threshold_metrics["f1"]
         fold_rows.append(fold_metrics)
 
         print(
@@ -676,6 +766,12 @@ def run_model_cv(
             "state_dict": model.state_dict(),
             "feature_mean": scaler.mean,
             "feature_std": scaler.std,
+            "threshold": threshold,
+            "threshold_objective": args.threshold_objective,
+            "min_recall": args.min_recall,
+            "best_epoch": best_epoch,
+            "best_val_f1": best_val_f1,
+            "class_weights": class_weights.detach().cpu().numpy(),
             "args": vars(args).copy(),
         }
         # Convert Path values so checkpoint metadata is serializable/readable.
@@ -684,12 +780,10 @@ def run_model_cv(
                 checkpoint["args"][k] = str(v)
 
         torch.save(checkpoint, models_dir / f"fold_{fold}.pt")
-        pd.DataFrame(
-            {
-                "epoch": np.arange(1, len(history) + 1),
-                "train_loss": history,
-            }
-        ).to_csv(histories_dir / f"fold_{fold}_history.csv", index=False)
+        pd.DataFrame(history).to_csv(
+            histories_dir / f"fold_{fold}_history.csv",
+            index=False,
+        )
 
         all_true.extend(y_test.tolist())
         all_pred.extend(y_pred.tolist())
@@ -806,8 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated 8 BlazePose indices for joints16 mode.",
     )
 
-    p.add_argument("--window-size", type=int, default=30)
-    p.add_argument("--stride", type=int, default=1)
+    p.add_argument("--window-size", type=int, default=45)
+    p.add_argument("--stride", type=int, default=15)
 
     p.add_argument(
         "--missing-mode",
@@ -819,15 +913,28 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Minimum detected-pose frames required per window (RF default: 1).")
     p.add_argument("--visibility-threshold", type=float, default=0.3)
 
-    p.add_argument("--hidden-size", type=int, default=80)
-    p.add_argument("--num-layers", type=int, default=10)
-    p.add_argument("--dropout", type=float, default=0.0)
+    p.add_argument("--hidden-size", type=int, default=128)
+    p.add_argument("--num-layers", type=int, default=2)
+    p.add_argument("--dropout", type=float, default=0.3)
 
-    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--patience", type=int, default=12)
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--grad-clip", type=float, default=5.0)
+    p.add_argument(
+        "--threshold-objective",
+        choices=["accuracy", "precision", "recall", "f1"],
+        default="f1",
+        help="Metric optimized on the inner validation split to choose the decision threshold.",
+    )
+    p.add_argument(
+        "--min-recall",
+        type=float,
+        default=0.0,
+        help="Minimum validation recall required when choosing the threshold.",
+    )
 
     p.add_argument("--folds", type=int, default=5)
     p.add_argument("--seed", type=int, default=42)
@@ -875,6 +982,16 @@ def main() -> None:
     X, y, groups, records_df, cache_config = experiment_common.load_windows_cache(
         args.windows_cache
     )
+    actual_window_size = int(X.shape[1])
+    actual_stride = None
+    if {"video_id", "start_frame"}.issubset(records_df.columns):
+        stride_candidates: List[int] = []
+        for _, frame in records_df.groupby("video_id"):
+            starts = np.sort(frame["start_frame"].to_numpy(dtype=np.int64))
+            diffs = np.diff(starts)
+            stride_candidates.extend(int(diff) for diff in diffs if diff > 0)
+        if stride_candidates:
+            actual_stride = int(pd.Series(stride_candidates).mode().iloc[0])
 
     # Save experiment configuration.
     config = vars(args).copy()
@@ -886,6 +1003,9 @@ def main() -> None:
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
             "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
+            "actual_window_size": actual_window_size,
+            "actual_stride": actual_stride,
+            "cache_config": cache_config,
         }
     )
     (args.experiment_output_dir / "config.json").write_text(
