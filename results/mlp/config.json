@@ -17,7 +17,7 @@
   "weight_decay": 0.0001,
   "folds": 5,
   "seed": 42,
-  "device": "auto",
+  "device": "cuda:1",
   "experiment_output_dir": "results/mlp",
   "annotation_csv": "data/urfall-cam0-falls.csv",
   "label_level": "window",

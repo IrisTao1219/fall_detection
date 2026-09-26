@@ -5,7 +5,14 @@
 DATA_ROOT="data/keypoints_normalized"
 OUTPUT_ROOT="results_normalized"
 WINDOWS_CACHE="${OUTPUT_ROOT}/windows/keypoints_normalized_windows.npz"
-DEVICE="auto"
+
+# DATA_ROOT="data/keypoints_normalized"
+# OUTPUT_ROOT="results_normalized"
+
+# DATA_ROOT="data/keypoints"
+# OUTPUT_ROOT="results"
+
+DEVICE="cuda:1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,10 +32,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 EXPERIMENTS=(
-  "stgcn"
   "rf"
   "mlp"
   "lstm"
+  "stgcn"
 )
 
 echo "========================================"

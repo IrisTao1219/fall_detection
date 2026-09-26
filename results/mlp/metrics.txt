@@ -18,7 +18,7 @@ learning_rate: 0.001
 weight_decay: 0.0001
 folds: 5
 seed: 42
-device: cuda
+device: cuda:1
 annotation_csv: data/urfall-cam0-falls.csv
 label_level: window
 window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)

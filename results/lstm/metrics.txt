@@ -21,7 +21,7 @@ learning_rate: 0.001
 weight_decay: 0.0
 folds: 5
 seed: 42
-device: cuda
+device: cuda:1
 
 [Fold 1/5]
 train_videos: 56
