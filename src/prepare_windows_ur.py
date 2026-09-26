@@ -7,10 +7,7 @@ import argparse
 from pathlib import Path
 
 
-try:
-    from .experiments import common as experiment_common
-except ImportError:
-    import common as experiment_common
+from experiments import common as experiment_common
 
 
 # ============================================================

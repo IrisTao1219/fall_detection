@@ -71,7 +71,7 @@ echo "Data root: $DATA_ROOT"
 echo "Output: $WINDOWS_CACHE"
 echo "========================================"
 
-uv run python "src/experiments/prepare_windows.py" \
+uv run python "src/prepare_windows_ur.py" \
   --data-root "$DATA_ROOT" \
   --output "$WINDOWS_CACHE" \
   --keypoint-adapter vitpose \

@@ -43,7 +43,7 @@ echo "Preparing shared windows cache"
 echo "Output: $WINDOWS_CACHE"
 echo "========================================"
 
-uv run python "src/experiments/prepare_windows.py" \
+uv run python "src/prepare_windows_ur.py" \
   --data-root "$DATA_ROOT" \
   --output "$WINDOWS_CACHE"
 
