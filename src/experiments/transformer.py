@@ -43,6 +43,8 @@ from common import (
     probabilities,
     seed_everything,
     save_binary_classification_outputs,
+    save_experiment_metrics_json,
+    save_experiment_metrics_text,
     save_experiment_config,
     save_metrics_json,
     save_seed_summary_outputs,
@@ -499,7 +501,7 @@ def main():
             }
         )
 
-    _, _, seed_frame = save_seed_summary_outputs(
+    prediction_frame, fold_frame, seed_frame = save_seed_summary_outputs(
         output,
         all_predictions,
         all_fold_rows,
@@ -520,7 +522,60 @@ def main():
         **seed_metric_summary(seed_frame),
     }
     save_metrics_json(output, summary)
-    save_summary_metrics_text(output, "TRANSFORMER SUMMARY", summary)
+    save_summary_metrics_text(
+        output,
+        "TRANSFORMER SUMMARY",
+        summary,
+        filename="summary_metrics.txt",
+    )
+    overall = _metrics_frame(prediction_frame)
+    metrics_header = [
+        f"data_root: {args.data_root}",
+        f"pose_estimator: {args.pose_estimator}",
+        f"dataset: {args.dataset_name}",
+        f"joint_count: {joint_count}",
+        f"input_dim: {x.shape[-1]}",
+        f"window_size: {x.shape[1]}",
+        f"normalization: {args.normalization}",
+        f"d_model: {args.d_model}",
+        f"heads: {args.heads}",
+        f"layers: {args.layers}",
+        f"feedforward_dim: {args.feedforward_dim}",
+        f"dropout: {args.dropout}",
+        f"epochs: {args.epochs}",
+        f"patience: {args.patience}",
+        f"batch_size: {args.batch_size}",
+        f"learning_rate: {args.learning_rate}",
+        f"weight_decay: {args.weight_decay}",
+        f"metric_objective: {args.metric_objective}",
+        f"min_recall: {args.min_recall}",
+        f"video_aggregation: {args.video_aggregation}",
+        f"video_topk: {args.video_topk}",
+        f"folds: {args.folds}",
+        f"seeds: {args.seeds}",
+        f"split_seed: {args.split_seed}",
+        f"device: {device}",
+        "label_level: window",
+        "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
+    ]
+    save_experiment_metrics_text(
+        output=output,
+        model="transformer",
+        header=metrics_header,
+        fold_rows=fold_frame,
+        overall=overall,
+        y_true=prediction_frame["label"].to_numpy(),
+        y_pred=prediction_frame["y_pred"].to_numpy(),
+    )
+    save_experiment_metrics_json(
+        output=output,
+        model="transformer",
+        data_root=args.data_root,
+        overall=overall,
+        fold_rows=fold_frame,
+        device=device,
+        extra={"summary": summary},
+    )
     save_experiment_config(output, args, {"output_dir": str(output)})
     print(f"Results: {output}")
 
