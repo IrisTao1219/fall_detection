@@ -18,7 +18,7 @@ bash src/experiments/vitpose/run_all.sh --data-root data/keypoints_vitpose --dev
 The script builds one shared cache with:
 
 ```bash
-uv run python src/prepare_windows.py \
+uv run python src/prepare_windows_ur.py \
   --data-root data/keypoints_vitpose \
   --output results/vitpose/windows/vitpose_windows.npz \
   --keypoint-adapter vitpose \
