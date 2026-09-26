@@ -17,13 +17,13 @@ from experiments import common as experiment_common
 # UR-Fall RGB 视频帧率
 URFALL_FPS = 30.0
 
-# 一个窗口观察 2 秒
-WINDOW_SECONDS = 2.0
+# 一个窗口观察 1.5 秒
+WINDOW_SECONDS = 1.5
 
 # 每隔 0.5 秒产生一个新窗口
 STRIDE_SECONDS = 0.5
 
-# 30 FPS × 2 s = 60 frames
+# 30 FPS × 1.5 s = 45 frames
 DEFAULT_WINDOW_SIZE = int(
     round(URFALL_FPS * WINDOW_SECONDS)
 )
@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     #
     # UR-Fall = 30 FPS
     #
-    # 60 frames = 2.0 seconds
+    # 45 frames = 1.5 seconds
     # 15 frames = 0.5 seconds
     # ========================================================
 

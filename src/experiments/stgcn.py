@@ -893,7 +893,7 @@ def main():
         f"ROC-AUC={fmt_metric(overall['roc_auc'])}"
     )
     print(report)
-    print(f"Saved: {metrics_path}")
+    print(f"Saved: {output / 'metrics.txt'}")
 
 
 if __name__ == "__main__":

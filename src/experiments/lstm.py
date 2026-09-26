@@ -757,7 +757,7 @@ def run_model_cv(
         f"ROC-AUC={fmt_metric(overall['roc_auc'])}"
     )
     print(report)
-    print(f"Saved: {metrics_path}")
+    print(f"Saved: {model_dir / 'metrics.txt'}")
 
 
 # -----------------------------
