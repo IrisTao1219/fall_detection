@@ -10,7 +10,7 @@
 DATA_ROOT="data/keypoints_vitpose"
 OUTPUT_ROOT="results/vitpose"
 WINDOWS_CACHE="${OUTPUT_ROOT}/windows/vitpose_windows.npz"
-DEVICE="auto"
+DEVICE="cuda:1"
 VISIBILITY_THRESHOLD="0.3"
 FEATURE_MODE="xy"
 
@@ -58,12 +58,11 @@ done
 WINDOWS_CACHE="${OUTPUT_ROOT}/windows/vitpose_windows.npz"
 
 EXPERIMENTS=(
-  "stgcn"
   "rf"
   "mlp"
   "lstm"
+  "stgcn"
   "transformer"
-  "blockgcn"
 )
 
 echo "========================================"
