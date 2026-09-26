@@ -1,0 +1,31 @@
+WINDOW METRICS
+accuracy: 0.9796672828096118
+precision: 0.9545454545454546
+recall: 0.8235294117647058
+f1: 0.8842105263157894
+roc_auc: 0.9727090836334533
+tn: 488
+fp: 2
+fn: 9
+tp: 42
+
+VIDEO METRICS
+accuracy: 0.8
+precision: 1.0
+recall: 0.5333333333333333
+f1: 0.6956521739130435
+roc_auc: 0.9791666666666667
+tn: 40
+fp: 0
+fn: 14
+tp: 16
+
+Classification report:
+              precision    recall  f1-score   support
+
+         ADL     0.9819    0.9959    0.9889       490
+        Fall     0.9545    0.8235    0.8842        51
+
+    accuracy                         0.9797       541
+   macro avg     0.9682    0.9097    0.9365       541
+weighted avg     0.9793    0.9797    0.9790       541

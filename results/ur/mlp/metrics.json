@@ -1,7 +1,7 @@
 {
   "model": "mlp",
   "data_root": "data/keypoints_ur",
-  "output_dir": "results_ur/mlp",
+  "output_dir": "results/ur/mlp",
   "overall": {
     "accuracy": 0.9704251386321626,
     "precision": 0.7777777777777778,

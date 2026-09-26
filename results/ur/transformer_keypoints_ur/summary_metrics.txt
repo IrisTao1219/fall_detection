@@ -1,0 +1,51 @@
+TRANSFORMER SUMMARY
+============================================================
+pose_estimator: unspecified
+dataset: unspecified
+joint_count: 33
+input_dim: 66
+window_size: 45
+parameter_count: 411394
+device: cuda:1
+seeds: [42]
+split_seed: 42
+
+seed_metric_mean
+window_accuracy: 0.9796672828096118
+window_precision: 0.9545454545454546
+window_recall: 0.8235294117647058
+window_f1: 0.8842105263157894
+window_roc_auc: 0.9727090836334533
+window_tn: 488.0
+window_fp: 2.0
+window_fn: 9.0
+window_tp: 42.0
+video_accuracy: 0.8
+video_precision: 1.0
+video_recall: 0.5333333333333333
+video_f1: 0.6956521739130435
+video_roc_auc: 0.9791666666666667
+video_tn: 40.0
+video_fp: 0.0
+video_fn: 14.0
+video_tp: 16.0
+
+seed_metric_std
+window_accuracy: 0.0
+window_precision: 0.0
+window_recall: 0.0
+window_f1: 0.0
+window_roc_auc: 0.0
+window_tn: 0.0
+window_fp: 0.0
+window_fn: 0.0
+window_tp: 0.0
+video_accuracy: 0.0
+video_precision: 0.0
+video_recall: 0.0
+video_f1: 0.0
+video_roc_auc: 0.0
+video_tn: 0.0
+video_fp: 0.0
+video_fn: 0.0
+video_tp: 0.0

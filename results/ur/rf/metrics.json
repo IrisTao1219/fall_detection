@@ -1,7 +1,7 @@
 {
   "model": "rf",
   "data_root": "data/keypoints_ur",
-  "output_dir": "results_ur/rf",
+  "output_dir": "results/ur/rf",
   "overall": {
     "accuracy": 0.9833641404805915,
     "precision": 0.9375,

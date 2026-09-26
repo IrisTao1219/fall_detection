@@ -18,10 +18,10 @@ from experiments import common as experiment_common
 URFALL_FPS = 30.0
 
 # 一个窗口观察 1.5 秒
-WINDOW_SECONDS = 1.5
+WINDOW_SECONDS = 1
 
 # 每隔 0.5 秒产生一个新窗口
-STRIDE_SECONDS = 0.5
+# STRIDE_SECONDS = 0.5
 
 # 30 FPS × 1.5 s = 45 frames
 DEFAULT_WINDOW_SIZE = int(
@@ -29,9 +29,7 @@ DEFAULT_WINDOW_SIZE = int(
 )
 
 # 30 FPS × 0.5 s = 15 frames
-DEFAULT_STRIDE = int(
-    round(URFALL_FPS * STRIDE_SECONDS)
-)
+DEFAULT_STRIDE = 1
 
 
 # ============================================================
@@ -97,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Sliding-window stride in frames. "
             f"Default: {DEFAULT_STRIDE} "
-            f"({STRIDE_SECONDS:.1f}s at {URFALL_FPS:.0f} FPS)."
+            f"({DEFAULT_STRIDE:.1f} at {URFALL_FPS:.0f} FPS)."
         ),
     )
 
@@ -327,7 +325,7 @@ def main() -> None:
             args.window_size
             / URFALL_FPS,
 
-        "stride_seconds":
+        "stride":
             args.stride
             / URFALL_FPS,
 

@@ -3,7 +3,7 @@
     "data_root": "data/keypoints_ur",
     "fall_annotation_csv": "data/urfall-cam0-falls.csv",
     "window_label_strategy": "UR-Fall frame labels: ignore 0, majority vote -1 vs 1",
-    "result_dir": "results_ur/rf",
+    "result_dir": "results/ur/rf",
     "normalized_input": false,
     "coordinate_field": "keypoints",
     "coordinate_channels": [

@@ -1,7 +1,7 @@
 {
   "model": "lstm",
   "data_root": "data/keypoints_ur",
-  "output_dir": "results_ur/lstm",
+  "output_dir": "results/ur/lstm",
   "overall": {
     "accuracy": 0.9648798521256932,
     "precision": 0.7758620689655172,

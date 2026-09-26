@@ -1,7 +1,7 @@
 {
   "data_root": "data/keypoints_ur",
   "windows_cache": "data/windows/keypoints_ur_windows.npz",
-  "output_root": "results_ur",
+  "output_root": "results/ur",
   "window_size": 30,
   "stride": 1,
   "missing_mode": "interp",
@@ -15,7 +15,7 @@
   "folds": 5,
   "seed": 42,
   "device": "cuda:1",
-  "experiment_output_dir": "results_ur/stgcn",
+  "experiment_output_dir": "results/ur/stgcn",
   "model_type": "stgcn",
   "feature_mode": "xy66",
   "channels": [

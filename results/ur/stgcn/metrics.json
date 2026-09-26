@@ -1,7 +1,7 @@
 {
   "model": "stgcn",
   "data_root": "data/keypoints_ur",
-  "output_dir": "results_ur/stgcn",
+  "output_dir": "results/ur/stgcn",
   "overall": {
     "accuracy": 0.988909426987061,
     "precision": 0.9245283018867925,

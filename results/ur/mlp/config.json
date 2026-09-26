@@ -1,7 +1,7 @@
 {
   "data_root": "data/keypoints_ur",
   "windows_cache": "data/windows/keypoints_ur_windows.npz",
-  "output_root": "results_ur",
+  "output_root": "results/ur",
   "window_size": 30,
   "stride": 1,
   "missing_mode": "interp",
@@ -19,7 +19,7 @@
   "folds": 5,
   "seed": 42,
   "device": "cuda:1",
-  "experiment_output_dir": "results_ur/mlp",
+  "experiment_output_dir": "results/ur/mlp",
   "annotation_csv": "data/urfall-cam0-falls.csv",
   "label_level": "window",
   "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
