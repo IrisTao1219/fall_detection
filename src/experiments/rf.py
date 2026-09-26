@@ -8,36 +8,33 @@ import joblib
 import numpy as np
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    confusion_matrix,
-    classification_report,
-)
 from sklearn.model_selection import StratifiedGroupKFold
 
 try:
+    from . import common as experiment_common
     from .common import (
         canonical_sequence_name as common_canonical_sequence_name,
         classification_report_text,
         compute_metrics,
         get_window_label_from_urfall as common_get_window_label_from_urfall,
+        fill_missing_temporally as common_fill_missing_temporally,
         interpolate_1d,
         load_fall_frame_labels as common_load_fall_frame_labels,
+        preprocess_keypoints as common_preprocess_keypoints,
         save_confusion_matrix_csv,
         video_type_labels,
     )
 except ImportError:
+    import common as experiment_common
     from common import (
         canonical_sequence_name as common_canonical_sequence_name,
         classification_report_text,
         compute_metrics,
         get_window_label_from_urfall as common_get_window_label_from_urfall,
+        fill_missing_temporally as common_fill_missing_temporally,
         interpolate_1d,
         load_fall_frame_labels as common_load_fall_frame_labels,
+        preprocess_keypoints as common_preprocess_keypoints,
         save_confusion_matrix_csv,
         video_type_labels,
     )
@@ -61,6 +58,7 @@ EXPERIMENT_NAME = None
 
 # 由命令行 --data-root 传入
 DATA_ROOT = None
+WINDOWS_CACHE = None
 
 # UR-Fall 官方逐帧姿态标注（只包含 fall 序列）
 # CSV 前三列：sequence name, frame number, label
@@ -214,6 +212,12 @@ def parse_args():
             "或 data/keypoints_normalized"
         ),
     )
+    parser.add_argument(
+        "--windows-cache",
+        type=Path,
+        required=True,
+        help="prepare_windows.py 生成的统一窗口缓存",
+    )
 
     parser.add_argument(
         "--output-root",
@@ -236,11 +240,13 @@ def configure_experiment(args):
             -> results/rf_normalized/
     """
     global DATA_ROOT
+    global WINDOWS_CACHE
     global RESULT_ROOT
     global RESULT_DIR
     global EXPERIMENT_NAME
 
     DATA_ROOT = args.data_root
+    WINDOWS_CACHE = args.windows_cache
     RESULT_ROOT = args.output_root
 
     dataset_name = DATA_ROOT.resolve().name.lower()
@@ -331,96 +337,8 @@ def fill_missing_temporally(window):
         使用该值填满窗口
     """
 
-    window = window.astype(
-        np.float32
-    ).copy()
-
-    if MISSING_VALUE_STRATEGY == "zero":
-
-        return np.nan_to_num(
-            window,
-            nan=0.0,
-            posinf=0.0,
-            neginf=0.0
-        )
-
-    if MISSING_VALUE_STRATEGY != "interpolate":
-
-        raise ValueError(
-            "MISSING_VALUE_STRATEGY "
-            "只能是 interpolate 或 zero"
-        )
-
-    num_frames = window.shape[0]
-
-    time_index = np.arange(
-        num_frames
-    )
-
-    for joint in range(
-        window.shape[1]
-    ):
-
-        for channel in range(
-            window.shape[2]
-        ):
-
-            values = window[
-                :,
-                joint,
-                channel
-            ]
-
-            valid = np.isfinite(
-                values
-            )
-
-            valid_count = int(
-                valid.sum()
-            )
-
-            # 整个窗口这个特征都缺失
-            if valid_count == 0:
-
-                window[
-                    :,
-                    joint,
-                    channel
-                ] = 0.0
-
-                continue
-
-            # 只有一个值
-            if valid_count == 1:
-
-                window[
-                    :,
-                    joint,
-                    channel
-                ] = values[
-                    valid
-                ][0]
-
-                continue
-
-            # 时间插值
-            missing = ~valid
-
-            values[
-                missing
-            ] = np.interp(
-                time_index[missing],
-                time_index[valid],
-                values[valid]
-            )
-
-            window[
-                :,
-                joint,
-                channel
-            ] = values
-
-    return window
+    mode = "interp" if MISSING_VALUE_STRATEGY == "interpolate" else MISSING_VALUE_STRATEGY
+    return common_fill_missing_temporally(window, mode)
 
 
 # ============================================================
@@ -438,65 +356,15 @@ def prepare_coordinates(data):
             [T]
     """
 
-    keypoints = data[
-        COORDINATE_FIELD
-    ]
-
-    valid_mask = data[
-        VALID_MASK_FIELD
-    ].astype(bool)
-
-    # --------------------------------------------------------
-    # x / y
-    # --------------------------------------------------------
-
-    coords = keypoints[
-        :,
-        :,
-        COORDINATE_CHANNELS
-    ].astype(
-        np.float32
-    ).copy()
-
-    # --------------------------------------------------------
-    # 整帧无 Pose
-    # --------------------------------------------------------
-
-    coords[
-        ~valid_mask
-    ] = np.nan
-
-    # --------------------------------------------------------
-    # visibility filter
-    # --------------------------------------------------------
-
-    if USE_VISIBILITY_FILTER:
-
-        visibility_source = data[
-            VISIBILITY_FIELD
-        ]
-
-        visibility = visibility_source[
-            :,
-            :,
-            VISIBILITY_CHANNEL
-        ]
-
-        invalid_landmarks = (
-            ~np.isfinite(
-                visibility
-            )
-            |
-            (
-                visibility
-                <
-                VISIBILITY_THRESHOLD
-            )
-        )
-
-        coords[
-            invalid_landmarks
-        ] = np.nan
+    keypoints = data[COORDINATE_FIELD]
+    valid_mask = data[VALID_MASK_FIELD].astype(bool)
+    visibility_threshold = VISIBILITY_THRESHOLD if USE_VISIBILITY_FILTER else -np.inf
+    coords = common_preprocess_keypoints(
+        keypoints=keypoints,
+        valid_mask=valid_mask,
+        visibility_threshold=visibility_threshold,
+        missing_mode="mask",
+    )
 
     return (
         coords,
@@ -508,471 +376,24 @@ def prepare_coordinates(data):
 # 4. 单个视频生成 Sliding Windows
 # ============================================================
 
-def generate_windows(
-    npz_path,
-    fall_annotations
-):
-    """
-    一个视频：
-
-        [T, 33, 2]
-
-    ↓
-
-    多个：
-
-        [30, 33, 2]
-
-    ↓
-
-    每个 flatten 成：
-
-        1980维
-    """
-
-    samples = []
-    labels = []
-    groups = []
-    metadata = []
-
-    with np.load(
-        npz_path,
-        allow_pickle=False
-    ) as data:
-
-        label_name = str(
-            data["label"].item()
-        )
-
-        video_id = str(
-            data["video_id"].item()
-        )
-
-        if label_name not in LABEL_MAP:
-
-            print(
-                f"[跳过] 未知 label："
-                f"{label_name}"
-            )
-
-            return (
-                samples,
-                labels,
-                groups,
-                metadata,
-                None
-            )
-
-        video_level_label = LABEL_MAP[
-            label_name
-        ]
-
-        # ----------------------------------------------------
-        # UR-Fall fall 序列逐帧标注
-        # ----------------------------------------------------
-
-        sequence_name = canonical_sequence_name(
-            video_id
-        )
-
-        if sequence_name is None:
-            sequence_name = canonical_sequence_name(
-                npz_path.stem
-            )
-
-        sequence_annotations = None
-
-        if label_name == "fall":
-
-            if sequence_name is None:
-                raise RuntimeError(
-                    f"无法从 video_id / 文件名解析 UR-Fall 序列："
-                    f"{video_id} / {npz_path.name}"
-                )
-
-            sequence_annotations = fall_annotations.get(
-                sequence_name
-            )
-
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"{video_id} 对应的 {sequence_name} "
-                    f"在 {FALL_ANNOTATION_CSV} 中没有逐帧标注"
-                )
-
-        # ----------------------------------------------------
-        # FPS
-        # ----------------------------------------------------
-
-        if "fps" in data.files:
-
-            fps = float(
-                data["fps"].item()
-            )
-
-        else:
-
-            fps = EXPECTED_FPS
-
-        if not np.isclose(
-            fps,
-            EXPECTED_FPS
-        ):
-
-            raise ValueError(
-                f"{video_id} FPS={fps}，"
-                f"与预期 {EXPECTED_FPS} 不一致"
-            )
-
-        window_size = int(
-            round(
-                fps
-                * WINDOW_SECONDS
-            )
-        )
-
-        coords, valid_mask = (
-            prepare_coordinates(
-                data
-            )
-        )
-
-        num_frames = (
-            coords.shape[0]
-        )
-
-        # ----------------------------------------------------
-        # 帧号
-        # ----------------------------------------------------
-
-        if "frame_indices" in data.files:
-
-            frame_indices = data[
-                "frame_indices"
-            ]
-
-        else:
-
-            frame_indices = np.arange(
-                1,
-                num_frames + 1
-            )
-
-        # ----------------------------------------------------
-        # timestamp
-        # ----------------------------------------------------
-
-        if "timestamps" in data.files:
-
-            timestamps = data[
-                "timestamps"
-            ]
-
-        else:
-
-            timestamps = (
-                np.arange(
-                    num_frames
-                )
-                / fps
-            )
-
-        # 视频不足一个窗口
-        if num_frames < window_size:
-
-            print(
-                f"[跳过] {video_id}: "
-                f"{num_frames} 帧 < "
-                f"{window_size} 帧"
-            )
-
-            return (
-                samples,
-                labels,
-                groups,
-                metadata,
-                window_size
-            )
-
-        # ====================================================
-        # Sliding Window
-        # ====================================================
-
-        for start in range(
-            0,
-            num_frames - window_size + 1,
-            WINDOW_STRIDE
-        ):
-
-            end = (
-                start
-                + window_size
-            )
-
-            # -----------------------------------------------
-            # 至少要有一定数量有效 Pose 帧
-            # -----------------------------------------------
-
-            window_valid_mask = (
-                valid_mask[
-                    start:end
-                ]
-            )
-
-            if (
-                int(
-                    window_valid_mask.sum()
-                )
-                <
-                MIN_VALID_FRAMES
-            ):
-
-                continue
-
-            # -----------------------------------------------
-            # 当前窗口标签
-            # -----------------------------------------------
-
-            if label_name == "adl":
-
-                # ADL 视频整段都是 normal / non-fall
-                window_label = 0
-
-            else:
-
-                # fall 视频不能再直接继承视频级标签。
-                # 根据当前窗口真实帧号，到官方 CSV 中取逐帧 posture label。
-                window_frame_numbers = frame_indices[
-                    start:end
-                ]
-
-                posture_labels = []
-
-                for frame_number in window_frame_numbers:
-                    posture_label = sequence_annotations.get(
-                        int(frame_number)
-                    )
-
-                    if posture_label is not None:
-                        posture_labels.append(
-                            posture_label
-                        )
-
-                window_label = get_window_label_from_urfall(
-                    posture_labels
-                )
-
-                # 当前窗口只有 0（falling transition），
-                # 或去掉 0 后 -1 / 1 恰好平票：跳过该窗口。
-                if window_label is None:
-                    continue
-
-            # -----------------------------------------------
-            # 当前窗口
-            # -----------------------------------------------
-
-            window = coords[
-                start:end
-            ].copy()
-
-            # -----------------------------------------------
-            # 缺失点处理
-            # -----------------------------------------------
-
-            window = (
-                fill_missing_temporally(
-                    window
-                )
-            )
-
-            # -----------------------------------------------
-            # Flatten
-            #
-            # [30, 33, 2]
-            #
-            # ->
-            #
-            # [1980]
-            # -----------------------------------------------
-
-            feature = window.reshape(
-                -1
-            )
-
-            feature = np.nan_to_num(
-                feature,
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0
-            ).astype(
-                np.float32
-            )
-
-            samples.append(
-                feature
-            )
-
-            labels.append(
-                window_label
-            )
-
-            # 非常重要：
-            # 所有来自同一视频的窗口
-            # group 都相同
-            groups.append(
-                video_id
-            )
-
-            metadata.append({
-
-                "video_id":
-                    video_id,
-
-                "label":
-                    ID_TO_LABEL[window_label],
-
-                "video_label":
-                    label_name,
-
-                "sequence_name":
-                    sequence_name,
-
-                "window_start":
-                    start,
-
-                "window_end":
-                    end - 1,
-
-                "start_frame":
-                    int(
-                        frame_indices[
-                            start
-                        ]
-                    ),
-
-                "end_frame":
-                    int(
-                        frame_indices[
-                            end - 1
-                        ]
-                    ),
-
-                "start_time":
-                    float(
-                        timestamps[
-                            start
-                        ]
-                    ),
-
-                "end_time":
-                    float(
-                        timestamps[
-                            end - 1
-                        ]
-                    ),
-            })
-
-    return (
-        samples,
-        labels,
-        groups,
-        metadata,
-        window_size
-    )
-
-
-# ============================================================
-# 5. 加载整个数据集
-# ============================================================
 
 def load_dataset():
-
-    fall_annotations = load_fall_frame_labels(
-        FALL_ANNOTATION_CSV
+    x_seq, y, groups, records, cache_config = experiment_common.load_windows_cache(
+        WINDOWS_CACHE
     )
-
-    npz_files = sorted(
-        DATA_ROOT.rglob(
-            "*.npz"
-        )
-    )
-
-    if not npz_files:
-
-        raise RuntimeError(
-            f"{DATA_ROOT} 中没有 npz"
-        )
-
-    print(
-        f"发现 {len(npz_files)} 个视频"
-    )
-
-    X = []
-    y = []
-    groups = []
+    expected_window_size = int(x_seq.shape[1])
+    X = x_seq.reshape(len(x_seq), -1).astype(np.float32)
     metadata = []
-
-    expected_window_size = None
-
-    for npz_path in npz_files:
-
-        (
-            video_X,
-            video_y,
-            video_groups,
-            video_metadata,
-            window_size
-        ) = generate_windows(
-            npz_path,
-            fall_annotations
-        )
-
-        if window_size is not None:
-
-            if expected_window_size is None:
-
-                expected_window_size = (
-                    window_size
-                )
-
-            elif (
-                expected_window_size
-                != window_size
-            ):
-
-                raise RuntimeError(
-                    "不同视频 window_size 不一致"
-                )
-
-        X.extend(
-            video_X
-        )
-
-        y.extend(
-            video_y
-        )
-
-        groups.extend(
-            video_groups
-        )
-
-        metadata.extend(
-            video_metadata
-        )
-
-    X = np.asarray(
-        X,
-        dtype=np.float32
-    )
-
-    y = np.asarray(
-        y,
-        dtype=np.int64
-    )
-
-    groups = np.asarray(
-        groups
-    )
+    for index, row in records.reset_index(drop=True).iterrows():
+        metadata.append({
+            "video_id": row.get("video_id", groups[index]),
+            "window_start": row.get("window_start", index),
+            "window_end": row.get("window_end", index),
+            "start_frame": int(row.get("start_frame", 0)),
+            "end_frame": int(row.get("end_frame", 0)),
+            "start_time": float(row.get("start_time", 0.0)),
+            "end_time": float(row.get("end_time", 0.0)),
+        })
 
     if len(X) == 0:
 
@@ -1635,191 +1056,48 @@ def cross_validate(
         fold_ids
     )
 
-    # metrics
-    with open(
-        RESULT_DIR
-        / "metrics.txt",
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        f.write(
-            f"Experiment: "
-            f"{EXPERIMENT_NAME}\n"
-        )
-
-        f.write(
-            "=" * 60
-            + "\n\n"
-        )
-
-        f.write(
-            f"Videos: "
-            f"{len(np.unique(groups))}\n"
-        )
-
-        f.write(
-            f"Windows: "
-            f"{len(X)}\n"
-        )
-
-        f.write(
-            f"Features: "
-            f"{X.shape[1]}\n"
-        )
-
-        f.write(
-            f"Window seconds: "
-            f"{WINDOW_SECONDS}\n"
-        )
-
-        f.write(
-            f"Window stride: "
-            f"{WINDOW_STRIDE}\n"
-        )
-
-        f.write(
-            f"Folds: "
-            f"{n_splits}\n\n"
-        )
-
-        # ============================================================
-        # 每一折结果
-        # ============================================================
-
-        f.write(
-            "Per-Fold Results\n"
-        )
-
-        f.write(
-            "-" * 60
-            + "\n"
-        )
-
-        for row in fold_results:
-        
-            (
-                fold,
-                train_videos,
-                test_videos,
-                train_windows,
-                test_windows,
-                fold_accuracy,
-                fold_precision,
-                fold_recall,
-                fold_f1,
-                fold_auc,
-            ) = row
-
-            f.write(
-                f"\nFold {fold}/{n_splits}\n"
-            )
-
-            f.write(
-                f"Train videos : "
-                f"{train_videos}\n"
-            )
-
-            f.write(
-                f"Test videos  : "
-                f"{test_videos}\n"
-            )
-
-            f.write(
-                f"Train windows: "
-                f"{train_windows}\n"
-            )
-
-            f.write(
-                f"Test windows : "
-                f"{test_windows}\n"
-            )
-
-            f.write(
-                f"Accuracy : "
-                f"{fold_accuracy:.4f}\n"
-            )
-
-            f.write(
-                f"Precision: "
-                f"{fold_precision:.4f}\n"
-            )
-
-            f.write(
-                f"Recall   : "
-                f"{fold_recall:.4f}\n"
-            )
-
-            f.write(
-                f"F1       : "
-                f"{fold_f1:.4f}\n"
-            )
-
-            f.write(
-                f"ROC-AUC  : "
-                f"{fold_auc:.4f}\n"
-            )
-
-        f.write(
-            "\n"
-            + "=" * 60
-            + "\n"
-        )
-
-        f.write(
-            "Overall Results\n"
-        )
-
-        f.write(
-            "-" * 60
-            + "\n"
-        )
-
-        f.write(
-            f"Accuracy : "
-            f"{accuracy:.4f}\n"
-        )
-
-        f.write(
-            f"Precision: "
-            f"{precision:.4f}\n"
-        )
-
-        f.write(
-            f"Recall   : "
-            f"{recall:.4f}\n"
-        )
-
-        f.write(
-            f"F1       : "
-            f"{f1:.4f}\n"
-        )
-
-        f.write(
-            f"ROC-AUC  : "
-            f"{auc:.4f}\n\n"
-        )
-
-        f.write(
-            "Classification Report\n"
-        )
-
-        f.write(
-            "-" * 60
-            + "\n"
-        )
-
-        f.write(
-            report
-        )
-
-        f.write(
-            "\nConfusion Matrix\n"
-        )
-
-        f.write(
-            str(cm)
-        )
+    fold_dicts = [
+        {
+            "fold": int(row[0]),
+            "train_videos": int(row[1]),
+            "test_videos": int(row[2]),
+            "train_windows": int(row[3]),
+            "test_windows": int(row[4]),
+            "accuracy": float(row[5]),
+            "precision": float(row[6]),
+            "recall": float(row[7]),
+            "f1": float(row[8]),
+            "roc_auc": float(row[9]),
+        }
+        for row in fold_results
+    ]
+    experiment_common.save_experiment_metrics_text(
+        output=RESULT_DIR,
+        model="rf",
+        header=[
+            f"data_root: {DATA_ROOT}",
+            f"experiment: {EXPERIMENT_NAME}",
+            f"videos: {len(np.unique(groups))}",
+            f"windows: {len(X)}",
+            f"features: {X.shape[1]}",
+            f"window_seconds: {WINDOW_SECONDS}",
+            f"window_stride: {WINDOW_STRIDE}",
+            f"folds: {n_splits}",
+        ],
+        fold_rows=fold_dicts,
+        overall=overall_metrics,
+        y_true=y,
+        y_pred=all_pred,
+        confusion=cm,
+        metric_keys=("accuracy", "precision", "recall", "f1", "roc_auc"),
+    )
+    experiment_common.save_experiment_metrics_json(
+        output=RESULT_DIR,
+        model="rf",
+        data_root=DATA_ROOT,
+        overall=overall_metrics,
+        fold_rows=fold_dicts,
+    )
 
     return (
         n_splits,

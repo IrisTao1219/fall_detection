@@ -79,6 +79,12 @@ POSE_EDGES = (
     (24, 26), (25, 27), (26, 28), (27, 29), (28, 30), (29, 31),
     (30, 32), (27, 31), (28, 32),
 )
+COCO17_EDGES = (
+    (0, 1), (0, 2), (1, 3), (2, 4),
+    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 11), (6, 12), (11, 12),
+    (11, 13), (13, 15), (12, 14), (14, 16),
+)
 STGCN_CHANNELS = (64,) * 4 + (128,) * 3 + (256,) * 3
 TEMPORAL_KERNEL_SIZE = 9
 
@@ -189,188 +195,6 @@ def normalize_label(value) -> int:
 def normalize_label_array(values: np.ndarray) -> np.ndarray:
     return np.asarray([normalize_label(v) for v in values], dtype=np.int64)
 
-
-def interpolate_1d(values: np.ndarray) -> np.ndarray:
-    out = values.astype(np.float32, copy=True)
-    idx = np.arange(len(out))
-    valid = np.isfinite(out)
-    if not np.any(valid):
-        return np.zeros_like(out, dtype=np.float32)
-    out[~valid] = np.interp(idx[~valid], idx[valid], out[valid])
-    return out
-
-
-def preprocess_keypoints(
-    keypoints: np.ndarray,
-    valid_mask: Optional[np.ndarray],
-    visibility_threshold: float,
-    missing_mode: str,
-) -> np.ndarray:
-    if keypoints.ndim != 3 or keypoints.shape[1] != 33 or keypoints.shape[2] < 2:
-        raise ValueError(f"Expected keypoints [T,33,C>=2], got shape {keypoints.shape}")
-
-    xy = keypoints[..., :2].astype(np.float32, copy=True)
-    frame_count = xy.shape[0]
-    joint_valid = np.isfinite(xy).all(axis=-1)
-
-    if keypoints.shape[2] >= 4:
-        visibility = keypoints[..., 3]
-        joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
-
-    if valid_mask is not None:
-        valid_mask = np.asarray(valid_mask).reshape(-1).astype(bool)
-        if len(valid_mask) != frame_count:
-            raise ValueError(
-                f"valid_mask length {len(valid_mask)} != keypoints frames {frame_count}"
-            )
-        joint_valid &= valid_mask[:, None]
-
-    xy[~joint_valid] = np.nan
-    if missing_mode == "mask":
-        pass
-    elif missing_mode == "zero":
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-    elif missing_mode == "interp":
-        for joint_idx in range(xy.shape[1]):
-            for coord_idx in range(2):
-                xy[:, joint_idx, coord_idx] = interpolate_1d(
-                    xy[:, joint_idx, coord_idx]
-                )
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-    else:
-        raise ValueError(f"Unknown missing_mode: {missing_mode}")
-    return xy.astype(np.float32)
-
-
-def build_frame_features(
-    xy: np.ndarray,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-) -> np.ndarray:
-    if feature_mode == "xy66":
-        return xy.reshape(xy.shape[0], -1).astype(np.float32)
-    if feature_mode == "joints16":
-        if joint_indices is None or len(joint_indices) != 8:
-            raise ValueError("joints16 requires exactly 8 joint indices")
-        idx = np.asarray(joint_indices, dtype=np.int64)
-        if np.any(idx < 0) or np.any(idx >= 33):
-            raise ValueError("All joint indices must be in [0, 32]")
-        return xy[:, idx, :].reshape(xy.shape[0], 16).astype(np.float32)
-    raise ValueError(f"Unknown feature_mode: {feature_mode}")
-
-
-@dataclass
-class WindowRecord:
-    video_id: str
-    source_file: str
-    window_start: int
-    start_frame: int
-    end_frame: int
-    label: int
-
-
-def make_windows(
-    features: np.ndarray,
-    label_data,
-    video_id: str,
-    source_file: str,
-    window_size: int,
-    stride: int,
-    frame_indices: np.ndarray,
-    valid_mask: Optional[np.ndarray] = None,
-    min_valid_frames: int = 1,
-    missing_mode: str = "interp",
-) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
-    frame_count = features.shape[0]
-    if frame_count < window_size:
-        return [], [], []
-    frame_indices = np.asarray(frame_indices).reshape(-1)
-    if len(frame_indices) != frame_count:
-        raise ValueError(
-            f"frame_indices length {len(frame_indices)} != feature frames {frame_count}"
-        )
-
-    label_arr = np.asarray(label_data)
-    is_frame_level = label_arr.ndim > 0 and label_arr.size == frame_count
-    if is_frame_level:
-        frame_labels = normalize_label_array(label_arr.reshape(-1))
-        scalar_label = None
-    else:
-        scalar_label = normalize_label(label_data)
-        frame_labels = None
-
-    x_list: List[np.ndarray] = []
-    y_list: List[int] = []
-    records: List[WindowRecord] = []
-
-    for start_frame in range(0, frame_count - window_size + 1, stride):
-        end_exclusive = start_frame + window_size
-        if valid_mask is not None:
-            valid_count = int(np.count_nonzero(valid_mask[start_frame:end_exclusive]))
-            if valid_count < min_valid_frames:
-                continue
-
-        window = features[start_frame:end_exclusive].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(window.shape[1]):
-                window[:, feature_idx] = interpolate_1d(window[:, feature_idx])
-        elif missing_mode == "zero":
-            window = np.nan_to_num(window, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-        if frame_labels is not None:
-            values, counts = np.unique(
-                frame_labels[start_frame:end_exclusive], return_counts=True
-            )
-            candidates = values[counts == counts.max()]
-            window_label = int(candidates.max())
-        else:
-            window_label = int(scalar_label)
-
-        x_list.append(window.astype(np.float32))
-        y_list.append(window_label)
-        records.append(
-            WindowRecord(
-                video_id=video_id,
-                source_file=source_file,
-                window_start=start_frame,
-                start_frame=int(frame_indices[start_frame]),
-                end_frame=int(frame_indices[end_exclusive - 1]),
-                label=window_label,
-            )
-        )
-    return x_list, y_list, records
-
-
-def discover_npz_files(root: Path) -> List[Path]:
-    files = sorted(root.rglob("*.npz"))
-    if not files:
-        raise FileNotFoundError(f"No .npz files found under: {root}")
-    return files
-
-
-def load_all_windows(
-    data_root: Path,
-    window_size: int,
-    stride: int,
-    visibility_threshold: float,
-    missing_mode: str,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-    min_valid_frames: int = 1,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    x, y, groups, records = experiment_common.load_sequence_windows(
-        data_root=data_root,
-        window_size=window_size,
-        stride=stride,
-        visibility_threshold=visibility_threshold,
-        missing_mode=missing_mode,
-        feature_mode=feature_mode,
-        joint_indices=joint_indices,
-        min_valid_frames=min_valid_frames,
-    )
-    return x.reshape(x.shape[0], x.shape[1], 33, 2), y, groups, records
 
 
 
@@ -652,9 +476,18 @@ def inner_group_split_window_labels(y, groups, seed):
     return experiment_common.inner_group_split_by_video_type(y, groups, seed)
 
 
-def make_adjacency() -> torch.Tensor:
-    adjacency = np.eye(33, dtype=np.float32)
-    for a, b in POSE_EDGES:
+def skeleton_edges(joint_count: int):
+    if joint_count == 33:
+        return POSE_EDGES, "BlazePose 33-joint physical graph"
+    if joint_count == 17:
+        return COCO17_EDGES, "COCO/VitPose 17-joint physical graph"
+    raise ValueError(f"ST-GCN only supports 33-joint BlazePose or 17-joint COCO/VitPose, got {joint_count}")
+
+
+def make_adjacency(joint_count: int) -> torch.Tensor:
+    edges, _ = skeleton_edges(joint_count)
+    adjacency = np.eye(joint_count, dtype=np.float32)
+    for a, b in edges:
         adjacency[a, b] = adjacency[b, a] = 1.0
     degree = adjacency.sum(axis=1)
     adjacency /= np.sqrt(degree[:, None] * degree[None, :])
@@ -687,9 +520,10 @@ class STGCNBlock(nn.Module):
 
 
 class STGCN(nn.Module):
-    def __init__(self, dropout: float = 0.3):
+    def __init__(self, joint_count: int, dropout: float = 0.3):
         super().__init__()
-        self.register_buffer("adjacency", make_adjacency())
+        self.joint_count = joint_count
+        self.register_buffer("adjacency", make_adjacency(joint_count))
         blocks = []
         in_channels = 2
         for layer, out_channels in enumerate(STGCN_CHANNELS):
@@ -701,8 +535,8 @@ class STGCN(nn.Module):
         self.classifier = nn.Linear(STGCN_CHANNELS[-1], 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Loader supplies [B,T,66]; graph layers use [B,C,T,V].
-        x = x.reshape(x.shape[0], x.shape[1], 33, 2).permute(0, 3, 1, 2)
+        # Loader supplies [B,T,V*2]; graph layers use [B,C,T,V].
+        x = x.reshape(x.shape[0], x.shape[1], self.joint_count, 2).permute(0, 3, 1, 2)
         for block in self.blocks:
             x = block(x, self.adjacency)
         # Keep logits for CrossEntropyLoss. Prediction uses Softmax in probabilities().
@@ -717,13 +551,13 @@ def standardize(x: np.ndarray, fit_idx: np.ndarray):
     return mean.astype(np.float32), std.astype(np.float32)
 
 
-def train_fold(x, y, groups, args, device, seed):
+def train_fold(x, y, groups, args, device, seed, joint_count: int):
     fit_idx, val_idx = inner_group_split_window_labels(y, groups, seed)
     mean, std = standardize(x, fit_idx)
     fit_loader = make_loader(((x[fit_idx] - mean) / std).astype(np.float32), y[fit_idx], args.batch_size, True)
     val_loader = make_loader(((x[val_idx] - mean) / std).astype(np.float32), y[val_idx], args.batch_size, False)
     seed_everything(seed)
-    model = STGCN(args.dropout).to(device)
+    model = STGCN(joint_count, args.dropout).to(device)
     counts = np.bincount(y[fit_idx], minlength=2)
     weights = torch.tensor(len(fit_idx) / (2 * counts), dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=weights)
@@ -772,6 +606,7 @@ fmt_metric = experiment_common.fmt_metric
 def parse_args():
     parser = argparse.ArgumentParser(description="Video-grouped ST-GCN fall detection experiment")
     parser.add_argument("--data-root", type=Path, default=Path("data/keypoints"))
+    parser.add_argument("--windows-cache", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=Path("results"))
     parser.add_argument("--window-size", type=int, default=30)
     parser.add_argument("--stride", type=int, default=1)
@@ -819,15 +654,19 @@ def main():
         f"feature_mode=xy66, missing_mode={args.missing_mode}"
     )
 
-    x, y, groups, records = load_all_windows(
-        args.data_root,
-        args.window_size,
-        args.stride,
-        args.visibility_threshold,
-        args.missing_mode,
-        "xy66",
-        None,
+    x, y, groups, records, cache_config = experiment_common.load_windows_cache(
+        args.windows_cache
     )
+    joint_count = int(cache_config.get("joint_count", x.shape[-1] // 2))
+    if x.shape[-1] != joint_count * 2:
+        raise ValueError(
+            f"ST-GCN expects XY features with D=joint_count*2, got D={x.shape[-1]} "
+            f"and joint_count={joint_count}"
+        )
+    _, graph_description = skeleton_edges(joint_count)
+    pose_extractor = "ViTPose" if joint_count == 17 else "BlazePose"
+    feature_mode = str(cache_config.get("feature_mode", f"xy{joint_count * 2}"))
+    x = x.reshape(x.shape[0], x.shape[1], joint_count, 2)
 
     # 一个 fall 视频现在可以同时含 normal/fall 窗口，所以不能再用窗口 y 的 mode
     # 判断“这个视频属于哪一类”。这里按视频名本身的 fall/adl 类型统计。
@@ -859,10 +698,12 @@ def main():
     config.update(
         {
             "model_type": "stgcn",
-            "feature_mode": "xy66",
+            "feature_mode": feature_mode,
             "channels": list(STGCN_CHANNELS),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
-            "pose_extractor": "BlazePose",
+            "pose_extractor": pose_extractor,
+            "joint_count": joint_count,
+            "graph": graph_description,
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
             "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
@@ -884,32 +725,30 @@ def main():
     all_test_indices = []
     fold_rows = []
 
-    metrics_lines = []
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("MODEL: ST-GCN")
-    metrics_lines.append("=" * 80)
-    metrics_lines.append(f"data_root: {args.data_root}")
-    metrics_lines.append("feature_mode: xy66")
-    metrics_lines.append(f"input_dim: {x.shape[-1]}")
-    metrics_lines.append(f"window_size: {args.window_size}")
-    metrics_lines.append(f"stride: {args.stride}")
-    metrics_lines.append(f"missing_mode: {args.missing_mode}")
-    metrics_lines.append(f"visibility_threshold: {args.visibility_threshold}")
-    metrics_lines.append(f"channels: {STGCN_CHANNELS}")
-    metrics_lines.append(f"temporal_kernel_size: {TEMPORAL_KERNEL_SIZE}")
-    metrics_lines.append(f"dropout: {args.dropout}")
-    metrics_lines.append(f"epochs: {args.epochs}")
-    metrics_lines.append(f"patience: {args.patience}")
-    metrics_lines.append(f"batch_size: {args.batch_size}")
-    metrics_lines.append(f"learning_rate: {args.learning_rate}")
-    metrics_lines.append(f"weight_decay: {args.weight_decay}")
-    metrics_lines.append(f"folds: {args.folds}")
-    metrics_lines.append(f"seed: {args.seed}")
-    metrics_lines.append(f"device: {device}")
-    metrics_lines.append(f"annotation_csv: {FALL_ANNOTATION_CSV}")
-    metrics_lines.append("label_level: window")
-    metrics_lines.append("window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)")
-    metrics_lines.append("")
+    metrics_header = [
+        f"data_root: {args.data_root}",
+        f"feature_mode: {feature_mode}",
+        f"input_shape_per_window: [{args.window_size}, {joint_count}, 2]",
+        f"graph: {graph_description}",
+        f"window_size: {args.window_size}",
+        f"stride: {args.stride}",
+        f"missing_mode: {args.missing_mode}",
+        f"visibility_threshold: {args.visibility_threshold}",
+        f"channels: {STGCN_CHANNELS}",
+        f"temporal_kernel_size: {TEMPORAL_KERNEL_SIZE}",
+        f"dropout: {args.dropout}",
+        f"epochs: {args.epochs}",
+        f"patience: {args.patience}",
+        f"batch_size: {args.batch_size}",
+        f"learning_rate: {args.learning_rate}",
+        f"weight_decay: {args.weight_decay}",
+        f"folds: {args.folds}",
+        f"seed: {args.seed}",
+        f"device: {device}",
+        f"annotation_csv: {FALL_ANNOTATION_CSV}",
+        "label_level: window",
+        "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
+    ]
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(x, split_y, groups), 1):
         train_groups = set(groups[train_idx])
@@ -931,6 +770,7 @@ def main():
             args,
             device,
             args.seed + fold,
+            joint_count,
         )
 
         test_x = ((x[test_idx] - mean) / std).astype(np.float32)
@@ -947,6 +787,8 @@ def main():
         row["fold"] = fold
         row["train_videos"] = len(train_groups)
         row["test_videos"] = len(test_groups)
+        row["train_windows"] = len(train_idx)
+        row["test_windows"] = len(test_idx)
         fold_rows.append(row)
 
         print(
@@ -961,25 +803,6 @@ def main():
             f"    TN={fold_metrics['tn']} FP={fold_metrics['fp']} "
             f"FN={fold_metrics['fn']} TP={fold_metrics['tp']}"
         )
-        metrics_lines.append(f"[Fold {fold}/{args.folds}]")
-        metrics_lines.append(f"train_videos: {len(train_groups)}")
-        metrics_lines.append(f"test_videos: {len(test_groups)}")
-        metrics_lines.append(f"train_windows: {len(train_idx)}")
-        metrics_lines.append(f"test_windows: {len(test_idx)}")
-        for key in [
-            "accuracy",
-            "precision",
-            "recall",
-            "f1",
-            "roc_auc",
-            "tn",
-            "fp",
-            "fn",
-            "tp",
-        ]:
-            metrics_lines.append(f"{key}: {fmt_metric(fold_metrics[key])}")
-        metrics_lines.append("")
-
         checkpoint = {
             "model_type": "stgcn",
             "input_dim": x.shape[-1],
@@ -989,9 +812,11 @@ def main():
             "state_dict": model.state_dict(),
             "feature_mean": mean,
             "feature_std": std,
+            "joint_count": joint_count,
+            "graph": graph_description,
             "best_epoch": best_epoch,
             "val_f1": val_f1,
-            "pose_extractor": "BlazePose",
+            "pose_extractor": pose_extractor,
             "args": vars(args).copy(),
         }
         for key, value in list(checkpoint["args"].items()):
@@ -1024,38 +849,25 @@ def main():
         zero_division=0,
     )
 
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("OVERALL OUT-OF-FOLD METRICS")
-    metrics_lines.append("=" * 80)
-    for key in [
-        "accuracy",
-        "precision",
-        "recall",
-        "f1",
-        "roc_auc",
-        "tn",
-        "fp",
-        "fn",
-        "tp",
-    ]:
-        metrics_lines.append(f"{key}: {fmt_metric(overall[key])}")
-
-    metrics_lines.append("")
-    metrics_lines.append("Classification report:")
-    metrics_lines.append(report)
-    metrics_lines.append("Confusion matrix [[TN, FP], [FN, TP]]:")
-    metrics_lines.append(np.array2string(cm))
-
     fold_df = pd.DataFrame(fold_rows)
-    metrics_lines.append("")
-    metrics_lines.append("Fold mean ± std:")
-    for key in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
-        mean_v = fold_df[key].mean()
-        std_v = fold_df[key].std(ddof=1)
-        metrics_lines.append(f"{key}: {mean_v:.6f} ± {std_v:.6f}")
-
-    metrics_path = output / "metrics.txt"
-    metrics_path.write_text("\n".join(metrics_lines), encoding="utf-8")
+    experiment_common.save_experiment_metrics_text(
+        output=output,
+        model="stgcn",
+        header=metrics_header,
+        fold_rows=fold_df,
+        overall=overall,
+        y_true=y_true_all,
+        y_pred=y_pred_all,
+        confusion=cm,
+    )
+    experiment_common.save_experiment_metrics_json(
+        output=output,
+        model="stgcn",
+        data_root=args.data_root,
+        overall=overall,
+        fold_rows=fold_df,
+        device=device,
+    )
 
     fold_df.to_csv(output / "fold_metrics.csv", index=False)
 

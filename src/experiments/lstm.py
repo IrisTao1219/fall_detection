@@ -285,250 +285,6 @@ def video_type_labels(groups: np.ndarray) -> np.ndarray:
 # Missing-value preprocessing
 # -----------------------------
 
-def interpolate_1d(values: np.ndarray) -> np.ndarray:
-    """
-    Linear interpolation along time.
-    If all values are missing, returns zeros.
-    Edge NaNs are filled with the nearest valid value.
-    """
-    out = values.astype(np.float32, copy=True)
-    idx = np.arange(len(out))
-    valid = np.isfinite(out)
-
-    if not np.any(valid):
-        return np.zeros_like(out, dtype=np.float32)
-
-    out[~valid] = np.interp(idx[~valid], idx[valid], out[valid])
-    return out
-
-
-def preprocess_keypoints(
-    keypoints: np.ndarray,
-    valid_mask: Optional[np.ndarray],
-    visibility_threshold: float,
-    missing_mode: str,
-) -> np.ndarray:
-    """
-    Return cleaned x/y tensor with shape [T, 33, 2].
-
-    A frame/joint is considered missing when:
-      - x or y is NaN/inf
-      - frame valid_mask is False
-      - visibility exists and is below threshold
-
-    missing_mode:
-      mask   -> leave missing coordinates as NaN for window-level processing
-      zero   -> unidentified joints become [0, 0]
-      interp -> temporal interpolation over the full video (legacy behavior)
-    """
-    if keypoints.ndim != 3 or keypoints.shape[1] != 33 or keypoints.shape[2] < 2:
-        raise ValueError(
-            f"Expected keypoints [T,33,C>=2], got shape {keypoints.shape}"
-        )
-
-    xy = keypoints[..., :2].astype(np.float32, copy=True)
-    T = xy.shape[0]
-
-    joint_valid = np.isfinite(xy).all(axis=-1)
-
-    if keypoints.shape[2] >= 4:
-        visibility = keypoints[..., 3]
-        joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
-
-    if valid_mask is not None:
-        valid_mask = np.asarray(valid_mask).reshape(-1).astype(bool)
-        if len(valid_mask) != T:
-            raise ValueError(
-                f"valid_mask length {len(valid_mask)} != keypoints frames {T}"
-            )
-        joint_valid &= valid_mask[:, None]
-
-    xy[~joint_valid] = np.nan
-
-    if missing_mode == "mask":
-        pass
-    elif missing_mode == "zero":
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-
-    elif missing_mode == "interp":
-        for joint_idx in range(xy.shape[1]):
-            for coord_idx in range(2):
-                xy[:, joint_idx, coord_idx] = interpolate_1d(
-                    xy[:, joint_idx, coord_idx]
-                )
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-
-    else:
-        raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-    return xy.astype(np.float32)
-
-
-# -----------------------------
-# Feature construction
-# -----------------------------
-
-def build_frame_features(
-    xy: np.ndarray,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-) -> np.ndarray:
-    """
-    xy66:
-        33 joints * (x,y) = 66-D per frame.
-
-    joints16:
-        exactly 8 user-selected joints * (x,y) = 16-D per frame.
-        This mode is intentionally explicit because the paper does not
-        document which 16 scalar dimensions were used.
-    """
-    if feature_mode == "xy66":
-        return xy.reshape(xy.shape[0], -1).astype(np.float32)
-
-    if feature_mode == "joints16":
-        if joint_indices is None or len(joint_indices) != 8:
-            raise ValueError(
-                "--feature-mode joints16 requires exactly 8 indices via "
-                "--joint-indices, e.g. 11,12,23,24,25,26,27,28"
-            )
-        idx = np.asarray(joint_indices, dtype=np.int64)
-        if np.any(idx < 0) or np.any(idx >= 33):
-            raise ValueError("All joint indices must be in [0, 32]")
-        return xy[:, idx, :].reshape(xy.shape[0], 16).astype(np.float32)
-
-    raise ValueError(f"Unknown feature_mode: {feature_mode}")
-
-
-# -----------------------------
-# Window generation
-# -----------------------------
-
-@dataclass
-class WindowRecord:
-    video_id: str
-    source_file: str
-    start_frame: int
-    end_frame: int
-    label: int
-
-
-def make_windows(
-    features: np.ndarray,
-    video_level_label: int,
-    video_id: str,
-    source_file: str,
-    window_size: int,
-    stride: int,
-    frame_indices: np.ndarray,
-    sequence_annotations: Optional[Dict[int, int]],
-    valid_mask: Optional[np.ndarray] = None,
-    min_valid_frames: int = 1,
-    missing_mode: str = "interp",
-) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
-    T = features.shape[0]
-
-    if T < window_size:
-        return [], [], []
-
-    frame_indices = np.asarray(frame_indices).reshape(-1)
-    if len(frame_indices) != T:
-        raise ValueError(
-            f"frame_indices length {len(frame_indices)} != feature frames {T}"
-        )
-
-    X_list: List[np.ndarray] = []
-    y_list: List[int] = []
-    records: List[WindowRecord] = []
-
-    for start in range(0, T - window_size + 1, stride):
-        end = start + window_size
-
-        if (
-            valid_mask is not None
-            and int(np.count_nonzero(valid_mask[start:end])) < min_valid_frames
-        ):
-            continue
-
-        # Window label: exactly the same UR-Fall CSV rule as RF/ST-GCN/MLP.
-        if video_level_label == 0:
-            # ADL videos are normal for the whole sequence.
-            y_win = 0
-        else:
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"Missing frame annotations for fall video {video_id}"
-                )
-
-            posture_labels: List[int] = []
-            for frame_number in frame_indices[start:end]:
-                posture_label = sequence_annotations.get(int(frame_number))
-                if posture_label is not None:
-                    posture_labels.append(posture_label)
-
-            y_from_csv = get_window_label_from_urfall(posture_labels)
-            if y_from_csv is None:
-                # All annotated frames are posture 0, no annotations are present,
-                # or -1/1 are tied after ignoring 0.
-                continue
-            y_win = int(y_from_csv)
-
-        x_win = features[start:end].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(x_win.shape[1]):
-                x_win[:, feature_idx] = interpolate_1d(x_win[:, feature_idx])
-        elif missing_mode == "zero":
-            x_win = np.nan_to_num(x_win, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-        X_list.append(x_win.astype(np.float32))
-        y_list.append(y_win)
-        records.append(
-            WindowRecord(
-                video_id=video_id,
-                source_file=source_file,
-                start_frame=int(frame_indices[start]),
-                end_frame=int(frame_indices[end - 1]),
-                label=y_win,
-            )
-        )
-
-    return X_list, y_list, records
-
-
-# -----------------------------
-# Dataset loading
-# -----------------------------
-
-def discover_npz_files(root: Path) -> List[Path]:
-    files = sorted(root.rglob("*.npz"))
-    if not files:
-        raise FileNotFoundError(f"No .npz files found under: {root}")
-    return files
-
-
-def load_all_windows(
-    data_root: Path,
-    window_size: int,
-    stride: int,
-    visibility_threshold: float,
-    missing_mode: str,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-    min_valid_frames: int = 1,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    return experiment_common.load_sequence_windows(
-        data_root=data_root,
-        window_size=window_size,
-        stride=stride,
-        visibility_threshold=visibility_threshold,
-        missing_mode=missing_mode,
-        feature_mode=feature_mode,
-        joint_indices=joint_indices,
-        min_valid_frames=min_valid_frames,
-        annotation_csv=FALL_ANNOTATION_CSV,
-    )
-
 
 # -----------------------------
 # Standardization
@@ -805,32 +561,29 @@ def run_model_cv(
     all_test_indices: List[int] = []
     fold_rows: List[Dict[str, float]] = []
 
-    metrics_lines: List[str] = []
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("MODEL: LSTM")
-    metrics_lines.append("=" * 80)
-    metrics_lines.append(f"data_root: {args.data_root}")
-    metrics_lines.append(f"annotation_csv: {FALL_ANNOTATION_CSV}")
-    metrics_lines.append("label_level: window")
-    metrics_lines.append("urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1")
-    metrics_lines.append(f"feature_mode: {args.feature_mode}")
-    metrics_lines.append(f"input_dim: {X.shape[-1]}")
-    metrics_lines.append(f"window_size: {args.window_size}")
-    metrics_lines.append(f"stride: {args.stride}")
-    metrics_lines.append(f"missing_mode: {args.missing_mode}")
-    metrics_lines.append(f"min_valid_frames: {args.min_valid_frames}")
-    metrics_lines.append(f"visibility_threshold: {args.visibility_threshold}")
-    metrics_lines.append(f"hidden_size: {args.hidden_size}")
-    metrics_lines.append(f"num_layers: {args.num_layers}")
-    metrics_lines.append(f"dropout: {args.dropout}")
-    metrics_lines.append(f"epochs: {args.epochs}")
-    metrics_lines.append(f"batch_size: {args.batch_size}")
-    metrics_lines.append(f"learning_rate: {args.learning_rate}")
-    metrics_lines.append(f"weight_decay: {args.weight_decay}")
-    metrics_lines.append(f"folds: {n_splits}")
-    metrics_lines.append(f"seed: {args.seed}")
-    metrics_lines.append(f"device: {device}")
-    metrics_lines.append("")
+    metrics_header = [
+        f"data_root: {args.data_root}",
+        f"annotation_csv: {FALL_ANNOTATION_CSV}",
+        "label_level: window",
+        "urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1",
+        f"feature_mode: {args.feature_mode}",
+        f"input_dim: {X.shape[-1]}",
+        f"window_size: {args.window_size}",
+        f"stride: {args.stride}",
+        f"missing_mode: {args.missing_mode}",
+        f"min_valid_frames: {args.min_valid_frames}",
+        f"visibility_threshold: {args.visibility_threshold}",
+        f"hidden_size: {args.hidden_size}",
+        f"num_layers: {args.num_layers}",
+        f"dropout: {args.dropout}",
+        f"epochs: {args.epochs}",
+        f"batch_size: {args.batch_size}",
+        f"learning_rate: {args.learning_rate}",
+        f"weight_decay: {args.weight_decay}",
+        f"folds: {n_splits}",
+        f"seed: {args.seed}",
+        f"device: {device}",
+    ]
 
     for fold, (train_idx, test_idx) in enumerate(
         splitter.split(X, split_y, groups=groups),
@@ -896,6 +649,8 @@ def run_model_cv(
         fold_metrics["fold"] = fold
         fold_metrics["train_videos"] = len(train_groups)
         fold_metrics["test_videos"] = len(test_groups)
+        fold_metrics["train_windows"] = len(train_idx)
+        fold_metrics["test_windows"] = len(test_idx)
         fold_rows.append(fold_metrics)
 
         print(
@@ -910,25 +665,6 @@ def run_model_cv(
             f"    TN={fold_metrics['tn']} FP={fold_metrics['fp']} "
             f"FN={fold_metrics['fn']} TP={fold_metrics['tp']}"
         )
-
-        metrics_lines.append(f"[Fold {fold}/{n_splits}]")
-        metrics_lines.append(f"train_videos: {len(train_groups)}")
-        metrics_lines.append(f"test_videos: {len(test_groups)}")
-        metrics_lines.append(f"train_windows: {len(train_idx)}")
-        metrics_lines.append(f"test_windows: {len(test_idx)}")
-        for key in [
-            "accuracy",
-            "precision",
-            "recall",
-            "f1",
-            "roc_auc",
-            "tn",
-            "fp",
-            "fn",
-            "tp",
-        ]:
-            metrics_lines.append(f"{key}: {fmt_metric(fold_metrics[key])}")
-        metrics_lines.append("")
 
         # Save fold checkpoint + training history.
         checkpoint = {
@@ -976,39 +712,25 @@ def run_model_cv(
         zero_division=0,
     )
 
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("OVERALL OUT-OF-FOLD METRICS")
-    metrics_lines.append("=" * 80)
-    for key in [
-        "accuracy",
-        "precision",
-        "recall",
-        "f1",
-        "roc_auc",
-        "tn",
-        "fp",
-        "fn",
-        "tp",
-    ]:
-        metrics_lines.append(f"{key}: {fmt_metric(overall[key])}")
-
-    metrics_lines.append("")
-    metrics_lines.append("Classification report:")
-    metrics_lines.append(report)
-    metrics_lines.append("Confusion matrix [[TN, FP], [FN, TP]]:")
-    metrics_lines.append(np.array2string(cm))
-
-    # Mean/std of fold metrics (useful for model comparison)
     fold_df = pd.DataFrame(fold_rows)
-    metrics_lines.append("")
-    metrics_lines.append("Fold mean ± std:")
-    for key in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
-        mean_v = fold_df[key].mean()
-        std_v = fold_df[key].std(ddof=1)
-        metrics_lines.append(f"{key}: {mean_v:.6f} ± {std_v:.6f}")
-
-    metrics_path = model_dir / "metrics.txt"
-    metrics_path.write_text("\n".join(metrics_lines), encoding="utf-8")
+    experiment_common.save_experiment_metrics_text(
+        output=model_dir,
+        model="lstm",
+        header=metrics_header,
+        fold_rows=fold_df,
+        overall=overall,
+        y_true=y_true_all,
+        y_pred=y_pred_all,
+        confusion=cm,
+    )
+    experiment_common.save_experiment_metrics_json(
+        output=model_dir,
+        model="lstm",
+        data_root=args.data_root,
+        overall=overall,
+        fold_rows=fold_df,
+        device=device,
+    )
 
     fold_df.to_csv(model_dir / "fold_metrics.csv", index=False)
 
@@ -1060,6 +782,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/keypoints_normalized"),
         help="Root containing label subfolders and .npz files.",
     )
+    p.add_argument("--windows-cache", type=Path, required=True)
     p.add_argument(
         "--output-root",
         type=Path,
@@ -1149,15 +872,8 @@ def main() -> None:
         f"feature_mode={args.feature_mode}, missing_mode={args.missing_mode}"
     )
 
-    X, y, groups, records_df = load_all_windows(
-        data_root=args.data_root,
-        window_size=args.window_size,
-        stride=args.stride,
-        visibility_threshold=args.visibility_threshold,
-        missing_mode=args.missing_mode,
-        feature_mode=args.feature_mode,
-        joint_indices=args.joint_indices,
-        min_valid_frames=args.min_valid_frames,
+    X, y, groups, records_df, cache_config = experiment_common.load_windows_cache(
+        args.windows_cache
     )
 
     # Save experiment configuration.
