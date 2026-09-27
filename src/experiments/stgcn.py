@@ -758,6 +758,8 @@ def main():
             "outer_train",
             "outer_test",
         )
+        train_groups = set(groups[train_idx])
+        test_groups = set(groups[test_idx])
 
         print("\n" + "=" * 72)
         print(

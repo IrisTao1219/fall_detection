@@ -645,6 +645,8 @@ def run_model_cv(
             "outer_train",
             "outer_test",
         )
+        train_groups = set(groups[train_idx])
+        test_groups = set(groups[test_idx])
 
         # Fit standardizer ONLY on this fold's training data.
         scaler = SequenceStandardizer.fit(X[train_idx])
