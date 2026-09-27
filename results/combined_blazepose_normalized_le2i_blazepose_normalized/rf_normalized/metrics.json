@@ -1,0 +1,92 @@
+{
+  "model": "rf",
+  "data_root": "data/combined_blazepose_normalized_le2i_blazepose_normalized",
+  "output_dir": "results/combined_blazepose_normalized_le2i_blazepose_normalized/rf_normalized",
+  "overall": {
+    "accuracy": 0.9259679248339543,
+    "precision": 0.6872427983539094,
+    "recall": 0.6863013698630137,
+    "f1": 0.686771761480466,
+    "roc_auc": 0.9480622340117631,
+    "tn": 5215,
+    "fp": 228,
+    "fn": 229,
+    "tp": 501
+  },
+  "fold_mean": {
+    "accuracy": 0.9259667940741731,
+    "precision": 0.6894860894171982,
+    "recall": 0.6884196222450725,
+    "f1": 0.6865498025184609,
+    "roc_auc": 0.9489754427483181
+  },
+  "fold_std": {
+    "accuracy": 0.006362885657615182,
+    "precision": 0.06243048467057394,
+    "recall": 0.04079682979387576,
+    "f1": 0.02451238204680824,
+    "roc_auc": 0.005945103265553434
+  },
+  "folds": [
+    {
+      "fold": 1,
+      "train_videos": 142,
+      "test_videos": 35,
+      "train_windows": 4934,
+      "test_windows": 1239,
+      "accuracy": 0.9241323648103309,
+      "precision": 0.6503067484662577,
+      "recall": 0.7412587412587412,
+      "f1": 0.6928104575163399,
+      "roc_auc": 0.9415037517227299
+    },
+    {
+      "fold": 2,
+      "train_videos": 142,
+      "test_videos": 35,
+      "train_windows": 4939,
+      "test_windows": 1234,
+      "accuracy": 0.919773095623987,
+      "precision": 0.6527777777777778,
+      "recall": 0.6573426573426573,
+      "f1": 0.6550522648083623,
+      "roc_auc": 0.944831520450219
+    },
+    {
+      "fold": 3,
+      "train_videos": 142,
+      "test_videos": 35,
+      "train_windows": 4943,
+      "test_windows": 1230,
+      "accuracy": 0.9211382113821138,
+      "precision": 0.726027397260274,
+      "recall": 0.6503067484662577,
+      "f1": 0.686084142394822,
+      "roc_auc": 0.9514722201459282
+    },
+    {
+      "fold": 4,
+      "train_videos": 141,
+      "test_videos": 36,
+      "train_windows": 4935,
+      "test_windows": 1238,
+      "accuracy": 0.9297253634894992,
+      "precision": 0.6363636363636364,
+      "recall": 0.7222222222222222,
+      "f1": 0.6765799256505576,
+      "roc_auc": 0.9567417494575767
+    },
+    {
+      "fold": 5,
+      "train_videos": 141,
+      "test_videos": 36,
+      "train_windows": 4941,
+      "test_windows": 1232,
+      "accuracy": 0.935064935064935,
+      "precision": 0.7819548872180451,
+      "recall": 0.6709677419354839,
+      "f1": 0.7222222222222222,
+      "roc_auc": 0.9503279719651361
+    }
+  ]
+}
