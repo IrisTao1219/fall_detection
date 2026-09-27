@@ -219,10 +219,10 @@ if [[ "${#KEYPOINTS_PROFILES[@]}" -gt 1 ]]; then
 fi
 
 EXPERIMENTS=(
-  # "rf"
-  # "mlp"
-  # "lstm"
-  # "stgcn"
+  "rf"
+  "mlp"
+  "lstm"
+  "stgcn"
   "transformer"
 )
 
