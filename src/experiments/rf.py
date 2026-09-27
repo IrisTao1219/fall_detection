@@ -825,6 +825,8 @@ def cross_validate(
             "outer_train",
             "outer_test",
         )
+        train_groups = set(groups[train_index])
+        test_groups = set(groups[test_index])
 
         X_train = X[
             train_index
