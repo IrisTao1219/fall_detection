@@ -465,7 +465,20 @@ def main():
         test_x = ((x[test_idx] - mean) / std).astype(np.float32)
         prob = probabilities(model, make_loader(test_x, y[test_idx], args.batch_size, False), device)
         pred = (prob >= 0.5).astype(np.int64)
-        metrics = compute_metrics(y[test_idx], pred, prob)
+        frame = records.iloc[test_idx].copy()
+        frame["y_true"] = y[test_idx]
+        frame["y_pred"] = pred
+        frame["fall_probability"] = prob
+        frame["threshold"] = 0.5
+        video_frame = experiment_common.aggregate_video_predictions(frame)
+        video_frame["y_pred"] = (
+            video_frame["fall_probability"] >= video_frame["threshold"]
+        ).astype(np.int64)
+        metrics = compute_metrics(
+            video_frame["label"].to_numpy(),
+            video_frame["y_pred"].to_numpy(),
+            video_frame["fall_probability"].to_numpy(),
+        )
         fold_rows.append({
             **metrics, "fold": fold,
             "train_videos": len(set(groups[train_idx])),
@@ -474,10 +487,6 @@ def main():
             "test_windows": len(test_idx),
             "best_epoch": best_epoch, "val_f1": val_f1,
         })
-        frame = records.iloc[test_idx].copy()
-        frame["y_true"] = y[test_idx]
-        frame["y_pred"] = pred
-        frame["fall_probability"] = prob
         predictions.append(frame)
         torch.save({
             "model_type": "mlp",
@@ -493,12 +502,17 @@ def main():
 
     pred_df = pd.concat(predictions, ignore_index=True)
     pred_df.to_csv(output / "predictions.csv", index=False)
+    video_df = experiment_common.aggregate_video_predictions(pred_df)
+    video_df["y_pred"] = (
+        video_df["fall_probability"] >= video_df["threshold"]
+    ).astype(np.int64)
+    video_df.to_csv(output / "video_predictions.csv", index=False)
     fold_df = pd.DataFrame(fold_rows)
     fold_df.to_csv(output / "fold_metrics.csv", index=False)
 
-    y_true = pred_df["y_true"].to_numpy()
-    y_pred = pred_df["y_pred"].to_numpy()
-    y_prob = pred_df["fall_probability"].to_numpy()
+    y_true = video_df["label"].to_numpy()
+    y_pred = video_df["y_pred"].to_numpy()
+    y_prob = video_df["fall_probability"].to_numpy()
     overall = compute_metrics(y_true, y_pred, y_prob)
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     pd.DataFrame(cm, index=["true_ADL", "true_Fall"],
@@ -526,7 +540,8 @@ def main():
             f"seed: {args.seed}",
             f"device: {device}",
             f"annotation_csv: {FALL_ANNOTATION_CSV}",
-            "label_level: window",
+            "label_level: video",
+            "video_aggregation: mean",
             "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
         ],
         fold_rows=fold_df,
@@ -546,7 +561,8 @@ def main():
     config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     config["experiment_output_dir"] = str(output)
     config["annotation_csv"] = str(FALL_ANNOTATION_CSV)
-    config["label_level"] = "window"
+    config["label_level"] = "video"
+    config["video_aggregation"] = "mean"
     config["urfall_window_label_rule"] = "ignore_0_then_majority_vote_-1_vs_1"
     (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     print(f"Overall F1={overall['f1']:.4f}, recall={overall['recall']:.4f}")

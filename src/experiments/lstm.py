@@ -597,6 +597,7 @@ def run_model_cv(
     all_true: List[int] = []
     all_pred: List[int] = []
     all_prob: List[float] = []
+    all_threshold: List[float] = []
     all_test_indices: List[int] = []
     fold_rows: List[Dict[str, float]] = []
 
@@ -626,6 +627,8 @@ def run_model_cv(
         f"folds: {n_splits}",
         f"seed: {args.seed}",
         f"device: {device}",
+        "label_level: video",
+        "video_aggregation: mean",
     ]
 
     for fold, (train_idx, test_idx) in enumerate(
@@ -733,7 +736,20 @@ def run_model_cv(
         )
         _, y_prob = predict(model, test_loader, device)
         y_pred = (y_prob >= threshold).astype(np.int64)
-        fold_metrics = compute_metrics(y_test, y_pred, y_prob)
+        fold_frame = records_df.iloc[test_idx].copy()
+        fold_frame["y_true"] = y_test
+        fold_frame["y_pred"] = y_pred
+        fold_frame["fall_probability"] = y_prob
+        fold_frame["threshold"] = threshold
+        fold_video_frame = experiment_common.aggregate_video_predictions(fold_frame)
+        fold_video_frame["y_pred"] = (
+            fold_video_frame["fall_probability"] >= fold_video_frame["threshold"]
+        ).astype(np.int64)
+        fold_metrics = compute_metrics(
+            fold_video_frame["label"].to_numpy(),
+            fold_video_frame["y_pred"].to_numpy(),
+            fold_video_frame["fall_probability"].to_numpy(),
+        )
         fold_metrics["fold"] = fold
         fold_metrics["train_videos"] = len(train_groups)
         fold_metrics["test_videos"] = len(test_groups)
@@ -792,6 +808,7 @@ def run_model_cv(
         all_true.extend(y_test.tolist())
         all_pred.extend(y_pred.tolist())
         all_prob.extend(y_prob.tolist())
+        all_threshold.extend([threshold] * len(y_prob))
         all_test_indices.extend(test_idx.tolist())
 
     # Overall out-of-fold metrics
@@ -799,11 +816,27 @@ def run_model_cv(
     y_pred_all = np.asarray(all_pred, dtype=np.int64)
     y_prob_all = np.asarray(all_prob, dtype=np.float32)
 
-    overall = compute_metrics(y_true_all, y_pred_all, y_prob_all)
-    cm = confusion_matrix(y_true_all, y_pred_all, labels=[0, 1])
+    pred_df = records_df.iloc[all_test_indices].copy().reset_index(drop=True)
+    pred_df["y_true"] = y_true_all
+    pred_df["y_pred"] = y_pred_all
+    pred_df["fall_probability"] = y_prob_all
+    pred_df["threshold"] = np.asarray(all_threshold, dtype=np.float32)
+    pred_df.to_csv(model_dir / "predictions.csv", index=False)
+
+    video_df = experiment_common.aggregate_video_predictions(pred_df)
+    video_df["y_pred"] = (
+        video_df["fall_probability"] >= video_df["threshold"]
+    ).astype(np.int64)
+    video_df.to_csv(model_dir / "video_predictions.csv", index=False)
+
+    video_y_true = video_df["label"].to_numpy()
+    video_y_pred = video_df["y_pred"].to_numpy()
+    video_y_prob = video_df["fall_probability"].to_numpy()
+    overall = compute_metrics(video_y_true, video_y_pred, video_y_prob)
+    cm = confusion_matrix(video_y_true, video_y_pred, labels=[0, 1])
     report = classification_report(
-        y_true_all,
-        y_pred_all,
+        video_y_true,
+        video_y_pred,
         labels=[0, 1],
         target_names=CLASS_NAMES,
         digits=4,
@@ -817,8 +850,8 @@ def run_model_cv(
         header=metrics_header,
         fold_rows=fold_df,
         overall=overall,
-        y_true=y_true_all,
-        y_pred=y_pred_all,
+        y_true=video_y_true,
+        y_pred=video_y_pred,
         confusion=cm,
     )
     experiment_common.save_experiment_metrics_json(
@@ -837,13 +870,6 @@ def run_model_cv(
         index=["true_ADL", "true_Fall"],
         columns=["pred_ADL", "pred_Fall"],
     ).to_csv(model_dir / "confusion_matrix.csv")
-
-    # OOF predictions aligned to original window metadata.
-    pred_df = records_df.iloc[all_test_indices].copy().reset_index(drop=True)
-    pred_df["y_true"] = y_true_all
-    pred_df["y_pred"] = y_pred_all
-    pred_df["fall_probability"] = y_prob_all
-    pred_df.to_csv(model_dir / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
     print("LSTM OVERALL")

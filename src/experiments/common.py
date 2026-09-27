@@ -992,9 +992,15 @@ def aggregate_video_predictions(
             video_probability = float(np.sort(probs)[-k:].mean())
         else:
             raise ValueError(f"未知视频级聚合方式：{mode}")
+        if "y_true" in group:
+            video_label = int(np.any(group["y_true"].to_numpy(dtype=np.int64) == 1))
+        elif "label" in group:
+            video_label = int(np.any(group["label"].to_numpy(dtype=np.int64) == 1))
+        else:
+            video_label = video_type_label(video_id)
         row = {
             "video_id": video_id,
-            "label": video_type_label(video_id),
+            "label": video_label,
             "fall_probability": video_probability,
             "windows": int(len(group)),
         }

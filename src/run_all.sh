@@ -16,12 +16,17 @@ WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
 DEVICE="cuda:1"
 WINDOW_SIZE="30"
 STRIDE="6"
+FPS="30"
+WINDOW_SECONDS="1"
+STRIDE_SECONDS="0.2"
 NEST_OUTPUT_BY_MODEL="0"
 DATA_ROOT_OVERRIDE=""
 OUTPUT_ROOT_OVERRIDE=""
 WINDOWS_CACHE_OVERRIDE=""
 WINDOW_SIZE_OVERRIDE=""
 STRIDE_OVERRIDE=""
+WINDOW_SECONDS_OVERRIDE=""
+STRIDE_SECONDS_OVERRIDE=""
 NEST_OUTPUT_BY_MODEL_OVERRIDE=""
 COMBINE_DATASETS="0"
 
@@ -37,6 +42,8 @@ Options:
   --device DEVICE         Torch device, e.g. cuda:1, cuda:0, cpu
   --window-size N         Window length passed to prepare_windows.py
   --stride N              Window stride passed to prepare_windows.py
+  --window-seconds S      Window length in seconds for combined dataset preparation
+  --stride-seconds S      Window stride in seconds for combined dataset preparation
   --combine-datasets      Combine multiple --keypoints profiles into one training/evaluation cache
   --nested-output         Pass results root as OUTPUT_ROOT/model for each experiment
   -h, --help              Show this help
@@ -59,6 +66,7 @@ apply_keypoints_profile() {
       WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
       WINDOW_SIZE="30"
       STRIDE="6"
+      FPS="30"
       NEST_OUTPUT_BY_MODEL="0"
       ;;
     ur-origin)
@@ -67,6 +75,7 @@ apply_keypoints_profile() {
       WINDOWS_CACHE="data/windows/keypoints_windows.npz"
       WINDOW_SIZE="30"
       STRIDE="6"
+      FPS="30"
       NEST_OUTPUT_BY_MODEL="0"
       ;;
     blazepose-normalized)
@@ -75,6 +84,7 @@ apply_keypoints_profile() {
       WINDOWS_CACHE="data/windows/keypoints_ur_normalized_windows.npz"
       WINDOW_SIZE="30"
       STRIDE="6"
+      FPS="30"
       NEST_OUTPUT_BY_MODEL="1"
       ;;
     le2i|le2i-blazepose|blazepose-le2i)
@@ -83,6 +93,7 @@ apply_keypoints_profile() {
       WINDOWS_CACHE="data/windows/keypoints_le2i_windows.npz"
       WINDOW_SIZE="25"
       STRIDE="5"
+      FPS="25"
       NEST_OUTPUT_BY_MODEL="0"
       ;;
     *)
@@ -161,6 +172,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --stride=*)
       STRIDE_OVERRIDE="${1#*=}"
+      shift
+      ;;
+    --window-seconds)
+      WINDOW_SECONDS_OVERRIDE="$2"
+      shift 2
+      ;;
+    --window-seconds=*)
+      WINDOW_SECONDS_OVERRIDE="${1#*=}"
+      shift
+      ;;
+    --stride-seconds)
+      STRIDE_SECONDS_OVERRIDE="$2"
+      shift 2
+      ;;
+    --stride-seconds=*)
+      STRIDE_SECONDS_OVERRIDE="${1#*=}"
       shift
       ;;
     --nested-output)
@@ -323,8 +350,8 @@ run_combined_profiles() {
   joined_profiles="$(IFS=,; echo "${KEYPOINTS_PROFILES[*]}")"
   local slug
   slug="$(profile_slug "$joined_profiles")"
-  local common_window_size="${WINDOW_SIZE_OVERRIDE:-30}"
-  local common_stride="${STRIDE_OVERRIDE:-6}"
+  local common_window_seconds="${WINDOW_SECONDS_OVERRIDE:-$WINDOW_SECONDS}"
+  local common_stride_seconds="${STRIDE_SECONDS_OVERRIDE:-$STRIDE_SECONDS}"
   local combined_cache="data/windows/combined_${slug}_windows.npz"
   local combined_output_root="results/combined_${slug}"
   local combined_data_root="data/combined_${slug}"
@@ -333,16 +360,22 @@ run_combined_profiles() {
   echo "========================================"
   echo "Preparing combined dataset windows"
   echo "Profiles: $joined_profiles"
-  echo "Common window size: $common_window_size"
-  echo "Common stride: $common_stride"
+  echo "Common window seconds: $common_window_seconds"
+  echo "Common stride seconds: $common_stride_seconds"
   echo "Combined cache: $combined_cache"
   echo "Combined output root: $combined_output_root"
   echo "========================================"
 
   for PROFILE in "${KEYPOINTS_PROFILES[@]}"; do
     apply_keypoints_profile "$PROFILE"
-    WINDOW_SIZE="$common_window_size"
-    STRIDE="$common_stride"
+    WINDOW_SIZE="$(python3 -c "print(max(1, round(float('$common_window_seconds') * float('$FPS'))))")"
+    STRIDE="$(python3 -c "print(max(1, round(float('$common_stride_seconds') * float('$FPS'))))")"
+    if [[ -n "$WINDOW_SIZE_OVERRIDE" ]]; then
+      WINDOW_SIZE="$WINDOW_SIZE_OVERRIDE"
+    fi
+    if [[ -n "$STRIDE_OVERRIDE" ]]; then
+      STRIDE="$STRIDE_OVERRIDE"
+    fi
     WINDOWS_CACHE="data/windows/${PROFILE}_for_${slug}_windows.npz"
 
     echo "----------------------------------------"
@@ -351,6 +384,7 @@ run_combined_profiles() {
     echo "Output: $WINDOWS_CACHE"
     echo "Window size: $WINDOW_SIZE"
     echo "Stride: $STRIDE"
+    echo "FPS: $FPS"
     echo "----------------------------------------"
 
     uv run python "src/prepare_windows.py" \

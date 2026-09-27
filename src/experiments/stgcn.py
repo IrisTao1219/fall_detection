@@ -722,6 +722,7 @@ def main():
     all_true = []
     all_pred = []
     all_prob = []
+    all_threshold = []
     all_test_indices = []
     fold_rows = []
 
@@ -746,7 +747,8 @@ def main():
         f"seed: {args.seed}",
         f"device: {device}",
         f"annotation_csv: {FALL_ANNOTATION_CSV}",
-        "label_level: window",
+        "label_level: video",
+        "video_aggregation: mean",
         "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
     ]
 
@@ -784,7 +786,20 @@ def main():
             device,
         )
         pred = (prob >= 0.5).astype(np.int64)
-        fold_metrics = compute_metrics(y[test_idx], pred, prob)
+        fold_frame = records.iloc[test_idx].copy()
+        fold_frame["y_true"] = y[test_idx]
+        fold_frame["y_pred"] = pred
+        fold_frame["fall_probability"] = prob
+        fold_frame["threshold"] = 0.5
+        fold_video_frame = experiment_common.aggregate_video_predictions(fold_frame)
+        fold_video_frame["y_pred"] = (
+            fold_video_frame["fall_probability"] >= fold_video_frame["threshold"]
+        ).astype(np.int64)
+        fold_metrics = compute_metrics(
+            fold_video_frame["label"].to_numpy(),
+            fold_video_frame["y_pred"].to_numpy(),
+            fold_video_frame["fall_probability"].to_numpy(),
+        )
 
         # Keep the same core fold_metrics.csv columns as sequence baseline.
         row = dict(fold_metrics)
@@ -835,6 +850,7 @@ def main():
         all_true.extend(y[test_idx].tolist())
         all_pred.extend(pred.tolist())
         all_prob.extend(prob.tolist())
+        all_threshold.extend([0.5] * len(prob))
         all_test_indices.extend(test_idx.tolist())
 
     # Overall out-of-fold metrics: same structure as sequence baseline.
@@ -842,11 +858,27 @@ def main():
     y_pred_all = np.asarray(all_pred, dtype=np.int64)
     y_prob_all = np.asarray(all_prob, dtype=np.float32)
 
-    overall = compute_metrics(y_true_all, y_pred_all, y_prob_all)
-    cm = confusion_matrix(y_true_all, y_pred_all, labels=[0, 1])
+    pred_df = records.iloc[all_test_indices].copy().reset_index(drop=True)
+    pred_df["y_true"] = y_true_all
+    pred_df["y_pred"] = y_pred_all
+    pred_df["fall_probability"] = y_prob_all
+    pred_df["threshold"] = np.asarray(all_threshold, dtype=np.float32)
+    pred_df.to_csv(output / "predictions.csv", index=False)
+
+    video_df = experiment_common.aggregate_video_predictions(pred_df)
+    video_df["y_pred"] = (
+        video_df["fall_probability"] >= video_df["threshold"]
+    ).astype(np.int64)
+    video_df.to_csv(output / "video_predictions.csv", index=False)
+
+    video_y_true = video_df["label"].to_numpy()
+    video_y_pred = video_df["y_pred"].to_numpy()
+    video_y_prob = video_df["fall_probability"].to_numpy()
+    overall = compute_metrics(video_y_true, video_y_pred, video_y_prob)
+    cm = confusion_matrix(video_y_true, video_y_pred, labels=[0, 1])
     report = classification_report(
-        y_true_all,
-        y_pred_all,
+        video_y_true,
+        video_y_pred,
         labels=[0, 1],
         target_names=["ADL", "Fall"],
         digits=4,
@@ -860,8 +892,8 @@ def main():
         header=metrics_header,
         fold_rows=fold_df,
         overall=overall,
-        y_true=y_true_all,
-        y_pred=y_pred_all,
+        y_true=video_y_true,
+        y_pred=video_y_pred,
         confusion=cm,
     )
     experiment_common.save_experiment_metrics_json(
@@ -880,12 +912,6 @@ def main():
         index=["true_ADL", "true_Fall"],
         columns=["pred_ADL", "pred_Fall"],
     ).to_csv(output / "confusion_matrix.csv")
-
-    pred_df = records.iloc[all_test_indices].copy().reset_index(drop=True)
-    pred_df["y_true"] = y_true_all
-    pred_df["y_pred"] = y_pred_all
-    pred_df["fall_probability"] = y_prob_all
-    pred_df.to_csv(output / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
     print("ST-GCN OVERALL")
