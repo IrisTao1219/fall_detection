@@ -895,20 +895,7 @@ def cross_validate(
         # Metrics
         # ----------------------------------------------------
 
-        fold_frame = pd.DataFrame([metadata[index] for index in test_index])
-        fold_frame["y_true"] = y_test
-        fold_frame["y_pred"] = prediction
-        fold_frame["fall_probability"] = probability
-        fold_frame["threshold"] = 0.5
-        fold_video_frame = experiment_common.aggregate_video_predictions(fold_frame)
-        fold_video_frame["y_pred"] = (
-            fold_video_frame["fall_probability"] >= fold_video_frame["threshold"]
-        ).astype(np.int64)
-        fold_metrics = compute_metrics(
-            fold_video_frame["label"].to_numpy(),
-            fold_video_frame["y_pred"].to_numpy(),
-            fold_video_frame["fall_probability"].to_numpy(),
-        )
+        fold_metrics = compute_metrics(y_test, prediction, probability)
         accuracy = fold_metrics["accuracy"]
         precision = fold_metrics["precision"]
         recall = fold_metrics["recall"]
@@ -991,28 +978,14 @@ def cross_validate(
     # Overall
     # ========================================================
 
-    prediction_frame = pd.DataFrame(metadata)
-    prediction_frame["y_true"] = y
-    prediction_frame["y_pred"] = all_pred
-    prediction_frame["fall_probability"] = all_prob
-    prediction_frame["threshold"] = 0.5
-    video_frame = experiment_common.aggregate_video_predictions(prediction_frame)
-    video_frame["y_pred"] = (
-        video_frame["fall_probability"] >= video_frame["threshold"]
-    ).astype(np.int64)
-    video_frame.to_csv(RESULT_DIR / "video_predictions.csv", index=False)
-    video_y_true = video_frame["label"].to_numpy()
-    video_y_pred = video_frame["y_pred"].to_numpy()
-    video_y_prob = video_frame["fall_probability"].to_numpy()
-
-    overall_metrics = compute_metrics(video_y_true, video_y_pred, video_y_prob)
+    overall_metrics = compute_metrics(y, all_pred, all_prob)
     accuracy = overall_metrics["accuracy"]
     precision = overall_metrics["precision"]
     recall = overall_metrics["recall"]
     f1 = overall_metrics["f1"]
     auc = overall_metrics["roc_auc"]
-    cm = save_confusion_matrix_csv(RESULT_DIR, video_y_true, video_y_pred)
-    report = classification_report_text(video_y_true, video_y_pred)
+    cm = save_confusion_matrix_csv(RESULT_DIR, y, all_pred)
+    report = classification_report_text(y, all_pred)
 
     print()
     print(
@@ -1101,13 +1074,12 @@ def cross_validate(
             f"window_seconds: {WINDOW_SECONDS}",
             f"window_stride: {WINDOW_STRIDE}",
             f"folds: {n_splits}",
-            "label_level: video",
-            "video_aggregation: mean",
+            "label_level: window",
         ],
         fold_rows=fold_dicts,
         overall=overall_metrics,
-        y_true=video_y_true,
-        y_pred=video_y_pred,
+        y_true=y,
+        y_pred=all_pred,
         confusion=cm,
         metric_keys=("accuracy", "precision", "recall", "f1", "roc_auc"),
     )
@@ -1187,10 +1159,7 @@ def save_config(
             WINDOW_STRIDE,
 
         "label_level":
-            "video",
-
-        "video_aggregation":
-            "mean",
+            "window",
 
         "missing_value_strategy":
             MISSING_VALUE_STRATEGY,
