@@ -291,12 +291,16 @@ run_profile() {
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$DATA_ROOT" \
         --windows-cache "$WINDOWS_CACHE" \
-        --output-root "$EXP_OUTPUT_ROOT"
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$WINDOW_SIZE" \
+        --stride "$STRIDE"
     else
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$DATA_ROOT" \
         --windows-cache "$WINDOWS_CACHE" \
         --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$WINDOW_SIZE" \
+        --stride "$STRIDE" \
         --device "$DEVICE"
     fi
 
@@ -318,6 +322,8 @@ run_experiments_once() {
   local windows_cache="$3"
   local output_root="$4"
   local nest_output_by_model="$5"
+  local window_size="$6"
+  local stride="$7"
 
   for EXP in "${EXPERIMENTS[@]}"; do
     EXP_OUTPUT_ROOT="$output_root"
@@ -336,12 +342,16 @@ run_experiments_once() {
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$data_root" \
         --windows-cache "$windows_cache" \
-        --output-root "$EXP_OUTPUT_ROOT"
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$window_size" \
+        --stride "$stride"
     else
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$data_root" \
         --windows-cache "$windows_cache" \
         --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$window_size" \
+        --stride "$stride" \
         --device "$DEVICE"
     fi
 
@@ -366,6 +376,8 @@ run_combined_profiles() {
   local combined_output_root="results/combined_${slug}"
   local combined_data_root="data/combined_${slug}"
   local combine_args=()
+  local combined_window_size=0
+  local combined_stride=0
 
   echo "========================================"
   echo "Preparing combined dataset windows"
@@ -385,6 +397,12 @@ run_combined_profiles() {
     fi
     if [[ -n "$STRIDE_OVERRIDE" ]]; then
       STRIDE="$STRIDE_OVERRIDE"
+    fi
+    if (( WINDOW_SIZE > combined_window_size )); then
+      combined_window_size="$WINDOW_SIZE"
+    fi
+    if (( STRIDE > combined_stride )); then
+      combined_stride="$STRIDE"
     fi
     WINDOWS_CACHE="data/windows/${PROFILE}_for_${slug}_windows.npz"
 
@@ -415,7 +433,9 @@ run_combined_profiles() {
     "$combined_data_root" \
     "$combined_cache" \
     "$combined_output_root" \
-    "0"
+    "0" \
+    "$combined_window_size" \
+    "$combined_stride"
 }
 
 if [[ "$COMBINE_DATASETS" == "1" ]]; then

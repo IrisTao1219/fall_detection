@@ -226,6 +226,8 @@ def parse_args():
         default=Path("results"),
         help="结果根目录，默认 results",
     )
+    parser.add_argument("--window-size", type=int, default=None)
+    parser.add_argument("--stride", type=int, default=None)
 
     return parser.parse_args()
 
