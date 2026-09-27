@@ -159,10 +159,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 EXPERIMENTS=(
-  "rf"
-  "mlp"
-  "lstm"
-  "stgcn"
+  # "rf"
+  # "mlp"
+  # "lstm"
+  # "stgcn"
+  "transformer"
 )
 
 echo "========================================"
