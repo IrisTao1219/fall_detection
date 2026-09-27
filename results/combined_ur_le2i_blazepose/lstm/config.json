@@ -28,7 +28,7 @@
   "label_level": "window",
   "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
   "actual_window_size": 30,
-  "actual_stride": 6,
+  "actual_stride": 5,
   "cache_config": {
     "combined": true,
     "datasets": [
@@ -64,7 +64,9 @@
         ],
         "windows": 1524,
         "adl_windows": 1332,
-        "fall_windows": 192
+        "fall_windows": 192,
+        "combined_original_window_frames": 30,
+        "combined_resampled_window_frames": 30
       },
       "le2i-blazepose": {
         "data_root": "data/keypoints_le2i",
@@ -73,9 +75,9 @@
         "fall_ratio_threshold": 0.3,
         "split_policy": "Windows are grouped by original video_id. Train/validation/test splits must be created with video_id groups kept disjoint before fitting scalers, models, thresholds, or metrics.",
         "fps": 25.0,
-        "window_seconds": 1.2,
-        "stride": 6,
-        "window_size": 30,
+        "window_seconds": 1.0,
+        "stride": 5,
+        "window_size": 25,
         "label_rule": "Fall if the fraction of frame_labels=1 among known labels is >= 0.3; otherwise non-fall.",
         "keypoint_adapter": "blazepose",
         "resolved_keypoint_adapter": "blazepose",
@@ -88,25 +90,29 @@
         "joint_count": 33,
         "feature_dim": 66,
         "shape": [
-          3867,
-          30,
+          4649,
+          25,
           66
         ],
-        "windows": 3867,
-        "adl_windows": 3378,
-        "fall_windows": 489
+        "windows": 4649,
+        "adl_windows": 4111,
+        "fall_windows": 538,
+        "combined_original_window_frames": 25,
+        "combined_resampled_window_frames": 30
       }
     },
     "joint_count": 33,
     "feature_dim": 66,
+    "window_resampling": "linear_time_axis_to_max_source_window_frames",
+    "target_window_frames": 30,
     "shape": [
-      5391,
+      6173,
       30,
       66
     ],
-    "windows": 5391,
-    "adl_windows": 4710,
-    "fall_windows": 681,
+    "windows": 6173,
+    "adl_windows": 5443,
+    "fall_windows": 730,
     "split_policy": "Combined cache prefixes every group/video_id with dataset name. Cross-validation must keep these prefixed original videos disjoint."
   }
 }
