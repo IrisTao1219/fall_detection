@@ -56,6 +56,16 @@ bash src/run_all.sh --keypoints ur-origin
 bash src/run_all.sh --keypoints blazepose-normalized
 ```
 
+如果要把两个数据集合并成一个联合数据集一起训练和测试，可以用逗号分隔多个 profile，并加上 `--combine-datasets`。脚本会先用相同窗口参数分别生成缓存，再合并为一个窗口缓存，最后只运行一套 RF、MLP、LSTM 和 ST-GCN：
+
+```bash
+bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
+```
+
+联合结果默认写入 `results/combined_ur_le2i_blazepose/{rf,mlp,lstm,stgcn}`，联合窗口缓存写入 `data/windows/combined_ur_le2i_blazepose_windows.npz`。合并时会给每个 `video_id` 加数据集前缀，例如 `ur::fall-01-cam0-rgb`，防止不同数据集视频名碰撞；交叉验证仍按前缀后的原始视频分组，避免同一视频的窗口跨训练折和测试折。
+
+如果只写逗号分隔、但不加 `--combine-datasets`，则表示连续跑多个数据集，结果仍分开保存。
+
 新增的 BlazePose + Le2i keypoints profile 使用 `data/keypoints_le2i/*.npz` 中的逐帧 `frame_labels` 生成窗口标签，结果写入 `results/le2i_blazepose/{rf,mlp,lstm,stgcn}`：
 
 ```bash
@@ -66,10 +76,11 @@ bash src/run_all.sh --keypoints le2i-blazepose
 
 ```bash
 bash src/run_all.sh --keypoints le2i-blazepose --device cuda:0
+bash src/run_all.sh --keypoints ur --window-size 30 --stride 6
 bash src/run_all.sh --keypoints le2i-blazepose --window-size 25 --stride 5
 ```
 
-`run_all.sh` 会先调用 `src/prepare_windows_ur.py` 生成共享窗口缓存。窗口脚本会根据 keypoints NPZ 自动选择标签来源：NPZ 中存在 `frame_labels` 时使用逐帧标签；否则按 UR-Fall keypoints 读取官方 `data/urfall-cam0-falls.csv`。
+`run_all.sh` 会先调用 `src/prepare_windows.py` 生成共享窗口缓存。窗口脚本会根据 keypoints NPZ 自动选择标签来源：NPZ 中存在 `frame_labels` 时使用逐帧标签；否则按 UR-Fall keypoints 读取官方 `data/urfall-cam0-falls.csv`。当前默认窗口统一为 1 秒、步长统一为 0.2 秒：UR-Fall 为 30 帧窗口/6 帧步长，Le2i 为 25 帧窗口/5 帧步长。
 
 ### 1. 提取姿态关键点
 
@@ -117,7 +128,7 @@ Le2i 的 NPZ 中 `label` 字段为 `mixed`，真正用于训练的是逐帧 `fra
 bash src/run_all.sh --keypoints le2i-blazepose
 ```
 
-默认 Le2i 窗口为 25 帧、步长 5 帧。窗口标签取中心帧的 `frame_labels`，同一原始视频的窗口不会同时出现在训练折和测试折中。
+默认 Le2i 窗口为 25 帧（1 秒）、步长 5 帧（0.2 秒）。窗口内已知 `frame_labels` 中 `1` 的占比达到 30% 时标为 fall，否则标为 non-fall。同一原始视频的窗口不会同时出现在训练折和测试折中。
 
 ### 2. 归一化坐标
 
@@ -136,7 +147,7 @@ uv run python src/experiments/rf.py --data-root data/keypoints_normalized
 
 脚本依据 `--data-root` 分别写入 `results/rf/` 和 `results/rf_normalized/`。可用 `--result-root` 修改结果根目录；其他实验参数在脚本顶部配置。
 
-每个窗口包含 30 帧（1 秒），步长为 1 帧；使用 33 个关键点的 `x/y` 坐标，展开后为 1980 维。低可见度或缺失坐标在窗口内按时间插值。`adl` 视频的窗口标为 0；`fall` 视频的窗口依据 `data/urfall-cam0-falls.csv` 的逐帧标注计算，规则见下文。评估采用按视频分组的分层交叉验证，同一视频的窗口不会同时进入训练集和测试集。交叉验证完成后，脚本再用全部窗口训练并保存最终模型。
+每个窗口包含 30 帧（1 秒），步长为 6 帧（0.2 秒）；使用 33 个关键点的 `x/y` 坐标，展开后为 1980 维。低可见度或缺失坐标在窗口内按时间插值。`adl` 视频的窗口标为 0；`fall` 视频的窗口依据 `data/urfall-cam0-falls.csv` 的逐帧标注计算，规则见下文。评估采用按视频分组的分层交叉验证，同一视频的窗口不会同时进入训练集和测试集。交叉验证完成后，脚本再用全部窗口训练并保存最终模型。
 
 结果目录包含 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`window_predictions.csv`、`feature_importance.csv` 和最终模型 `.joblib`。`metrics.txt` 中的总体指标来自各折测试窗口的汇总预测；它们是**窗口级**指标，不是独立视频或实时场景的检测指标。
 
@@ -147,7 +158,7 @@ uv run python src/experiments/lstm.py --data-root data/keypoints
 uv run python src/experiments/lstm.py --data-root data/keypoints_normalized
 ```
 
-LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。保存的两组配置使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、1 帧步长、窗口内插值、跳过完全没有检测到人体的窗口、10 层单向 LSTM（隐藏维度 80）和 30 个训练轮次。按视频分组做 5 折评估，每折仅用训练视频拟合标准化参数。结果目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和 `histories/` 中的训练损失历史；当前仓库没有保存每折模型权重。
+LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。保存的两组配置使用 33 个关节的 `x/y`（每帧 66 维）、30 帧窗口、6 帧步长、窗口内插值、跳过完全没有检测到人体的窗口，并按视频分组做 5 折评估。结果目录保存了 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv` 和 `histories/` 中的训练损失历史。
 
 ### 5. 训练并评估 MLP
 
@@ -157,7 +168,7 @@ LSTM 结果写入 `results/lstm/` 和 `results/lstm_normalized/`。保存的两�
 uv run python src/experiments/mlp.py --data-root data/keypoints_normalized
 ```
 
-原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、1 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，与 LSTM 使用相同的结果结构：根目录有 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv`；程序将每折 `.pt` 模型写入 `models/`，每折训练历史 CSV 写入 `histories/`。总体指标同样来自折外窗口预测。
+原始坐标实验可把数据目录改为 `data/keypoints`。默认使用全部 33 个关节的 `x/y`、30 帧窗口、6 帧步长、缺失坐标时间插值和两层 MLP（256、64 个隐藏单元）。五折按视频分组，训练折内再按视频划分验证集用于早停；标准化参数仅由内部训练视频计算。输出分别保存在 `results/mlp_normalized/` 或 `results/mlp/`，与 LSTM 使用相同的结果结构：根目录有 `config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv`、`predictions.csv`；程序将每折 `.pt` 模型写入 `models/`，每折训练历史 CSV 写入 `histories/`。总体指标同样来自折外窗口预测。
 
 MLP 的原始与归一化坐标结果均已按 CSV 窗口标签保存，具体指标见下表。当前仓库没有保存每折模型权重。
 
@@ -168,7 +179,7 @@ uv run python src/experiments/stgcn.py --data-root data/keypoints
 uv run python src/experiments/stgcn.py --data-root data/keypoints_normalized
 ```
 
-ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、1 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，使用十个时空图卷积模块：前四层 64 通道、中间三层 128 通道、后三层 256 通道；时间卷积核大小为 9，每层包含残差连接和 Dropout，预测时用 Softmax 得到类别概率。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。当前只支持已有的 BlazePose 数据，尚未接入其他姿态提取器或数据集。
+ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、30 帧窗口、6 帧步长、窗口内缺失坐标插值，并跳过完全没有检测到人体的窗口。模型按 BlazePose 关节连接构图，使用十个时空图卷积模块：前四层 64 通道、中间三层 128 通道、后三层 256 通道；时间卷积核大小为 9，每层包含残差连接和 Dropout，预测时用 Softmax 得到类别概率。外层按视频分组做五折评估，训练折内再按视频划分验证集用于早停；标准化参数只由内部训练视频计算。当前只支持已有的 BlazePose 数据，尚未接入其他姿态提取器或数据集。
 
 原始和归一化坐标实验分别写入 `results/stgcn/` 和 `results/stgcn_normalized/`。目录结构与 LSTM 相同：程序将每折模型写入 `models/`，每折训练历史写入 `histories/`；`config.json`、`metrics.txt`、`fold_metrics.csv`、`confusion_matrix.csv` 和 `predictions.csv` 位于结果目录根部。程序还保存视频级预测和指标、划分记录及 `metrics.json`。两组十层网络结果均已保存。
 
@@ -176,7 +187,7 @@ ST-GCN 复用 LSTM 的关键点读取与窗口切分：33 个关节的 `x/y`、3
 
 ### 新结果：CSV 逐窗口标签
 
-本次改动是**标签的计算单位**。旧实验按视频所属的 `fall` 或 `adl` 目录取一个标签，再赋给该视频的全部滑动窗口；这会把跌倒视频中跌倒发生前的正常活动也标成 `fall`。新实验对 `fall` 视频读取 [`data/urfall-cam0-falls.csv`](data/urfall-cam0-falls.csv) 的前三列（视频名、帧号、姿态标签），按每个 30 帧窗口实际覆盖的帧号取标注。CSV 中 `-1` 表示非躺倒、`0` 表示跌倒过渡、`1` 表示躺倒；计算窗口标签时忽略 `0`，在余下的 `-1` 与 `1` 中按多数票分别记为 `adl=0` 或 `fall=1`。有效标签为空或票数持平的窗口被跳过；`adl` 视频的窗口均标为 0。**因此这里的正类依照 CSV 对“躺倒”的标注，不等同于把跌倒过渡阶段也算作正类。**
+本次改动是**标签的计算单位**。旧实验按视频所属的 `fall` 或 `adl` 目录取一个标签，再赋给该视频的全部滑动窗口；这会把跌倒视频中跌倒发生前的正常活动也标成 `fall`。新实验对 `fall` 视频读取 [`data/urfall-cam0-falls.csv`](data/urfall-cam0-falls.csv) 的前三列（视频名、帧号、姿态标签），按每个窗口实际覆盖的帧号取标注。CSV 中 `-1` 表示非躺倒、`0` 表示跌倒过渡、`1` 表示跌倒后躺地；当窗口内有效标注中 `0` 的占比达到 30% 时记为 `fall=1`，否则记为 `adl=0`。没有有效逐帧标注的窗口会被跳过，`adl` 视频的窗口均标为 0。
 
 下面取自 `results/` 与 `results_normalized/` 各目录的 `metrics.txt`，是按视频分组的 5 折**折外窗口预测汇总指标**，并非视频级或事件级指标。八组结果各有 8963 个窗口，其中 883 个为正类；MLP 和 ST-GCN 的窗口位置与真实标签均已分别同对应的 LSTM 结果逐项核对一致。ST-GCN 的当前结果已使用修正后的原始帧号映射。
 

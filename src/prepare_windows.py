@@ -17,19 +17,21 @@ from experiments import common as experiment_common
 # UR-Fall RGB 视频帧率
 URFALL_FPS = 30.0
 
-# 一个窗口观察 1.5 秒
-WINDOW_SECONDS = 1
+# 一个窗口观察 1 秒
+WINDOW_SECONDS = 1.0
 
-# 每隔 0.5 秒产生一个新窗口
-# STRIDE_SECONDS = 0.5
+# 每隔 0.2 秒产生一个新窗口
+STRIDE_SECONDS = 0.2
 
-# 30 FPS × 1.5 s = 45 frames
+# 30 FPS × 1.0 s = 30 frames
 DEFAULT_WINDOW_SIZE = int(
     round(URFALL_FPS * WINDOW_SECONDS)
 )
 
-# 30 FPS × 0.5 s = 15 frames
-DEFAULT_STRIDE = 1
+# 30 FPS × 0.2 s = 6 frames
+DEFAULT_STRIDE = int(
+    round(URFALL_FPS * STRIDE_SECONDS)
+)
 
 
 # ============================================================
@@ -73,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     #
     # UR-Fall = 30 FPS
     #
-    # 45 frames = 1.5 seconds
-    # 15 frames = 0.5 seconds
+    # 30 frames = 1.0 seconds
+    # 6 frames = 0.2 seconds
     # ========================================================
 
     parser.add_argument(
@@ -95,7 +97,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Sliding-window stride in frames. "
             f"Default: {DEFAULT_STRIDE} "
-            f"({DEFAULT_STRIDE:.1f} at {URFALL_FPS:.0f} FPS)."
+            f"({STRIDE_SECONDS:.1f}s at {URFALL_FPS:.0f} FPS)."
         ),
     )
 
@@ -303,14 +305,16 @@ def main() -> None:
     fps = 25.0 if label_source == "frame_labels" else URFALL_FPS
     if label_source == "frame_labels":
         label_rule = (
-            "Fall/non-fall label is taken from the center frame's "
-            "binary frame_labels value in each keypoints NPZ."
+            "Fall if the fraction of frame_labels=1 among known labels "
+            f"is >= {experiment_common.FALL_WINDOW_RATIO_THRESHOLD}; "
+            "otherwise non-fall."
         )
     else:
         label_rule = (
-            "Fall if window center is inside UR-Fall transition label 0; "
-            "Non-fall if window has no transition frames; "
-            "ambiguous boundary windows ignored."
+            "Fall if the fraction of UR-Fall transition label 0 among "
+            "valid frame labels in the window is >= "
+            f"{experiment_common.FALL_WINDOW_RATIO_THRESHOLD}; "
+            "otherwise non-fall."
         )
 
     config = {
@@ -327,6 +331,17 @@ def main() -> None:
 
         "label_source":
             label_source,
+
+        "fall_ratio_threshold":
+            experiment_common.FALL_WINDOW_RATIO_THRESHOLD,
+
+        "split_policy":
+            (
+                "Windows are grouped by original video_id. "
+                "Train/validation/test splits must be created with "
+                "video_id groups kept disjoint before fitting scalers, "
+                "models, thresholds, or metrics."
+            ),
 
         # ----------------------------------------------------
         # 时间信息

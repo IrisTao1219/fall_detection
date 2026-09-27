@@ -499,29 +499,28 @@ def determine_n_splits(
     这里统计每个类别至少出现在多少个独立视频中，
     再据此决定 StratifiedGroupKFold 的最大折数。
     """
-    unique_groups = np.unique(
+    split_y = experiment_common.group_stratification_labels(
+        y,
         groups
     )
+    unique_group_types = {}
+    for group in np.unique(groups):
+        values = np.unique(split_y[groups == group])
+        if len(values) != 1:
+            raise RuntimeError(
+                f"视频 {group} 出现多个分层类别"
+            )
+        unique_group_types[group] = int(values[0])
 
     group_class_counts = {
-        label: 0
-        for label in LABEL_MAP.values()
+        0: 0,
+        1: 0,
     }
-
-    for group in unique_groups:
-
-        group_y = y[
-            groups == group
-        ]
-
-        for label in group_class_counts:
-
-            if np.any(
-                group_y == label
-            ):
-                group_class_counts[
-                    label
-                ] += 1
+    for label in unique_group_types.values():
+        group_class_counts[label] = (
+            group_class_counts.get(label, 0)
+            + 1
+        )
 
     min_group_count = min(
         group_class_counts.values()
@@ -777,6 +776,11 @@ def cross_validate(
         random_state=RANDOM_STATE
     )
 
+    split_y = experiment_common.group_stratification_labels(
+        y,
+        groups
+    )
+
     all_pred = np.zeros(
         len(y),
         dtype=np.int64
@@ -804,39 +808,23 @@ def cross_validate(
     ) in enumerate(
         cv.split(
             X,
-            y,
+            split_y,
             groups
         ),
         start=1
     ):
 
-        train_groups = set(
-            groups[
-                train_index
-            ]
-        )
-
-        test_groups = set(
-            groups[
-                test_index
-            ]
-        )
-
         # ----------------------------------------------------
         # 防止视频泄漏
         # ----------------------------------------------------
 
-        overlap = (
-            train_groups
-            & test_groups
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_index,
+            test_index,
+            "outer_train",
+            "outer_test",
         )
-
-        if overlap:
-
-            raise RuntimeError(
-                "发现视频泄漏："
-                f"{overlap}"
-            )
 
         X_train = X[
             train_index
