@@ -18,23 +18,26 @@
 | 9 | results/ur_origin/lstm | overall | 0.9776 | 0.9231 | 0.8426 | 0.8810 | 0.9633 | 744 | 62 | 139 | 8018 | metrics.txt |
 | 10 | results/vitpose/mlp | overall | 0.9772 | 0.8942 | 0.8516 | 0.8724 | 0.9880 | 769 | 91 | 134 | 8872 | metrics.txt |
 | 11 | results/ur_blazepose/mlp | overall | 0.9704 | 0.7778 | 0.9608 | 0.8596 | 0.9818 | 49 | 14 | 2 | 476 | metrics.txt |
-| 12 | results/ur_blazepose/lstm | overall | 0.9649 | 0.7759 | 0.8824 | 0.8257 | 0.9469 | 45 | 13 | 6 | 477 | metrics.txt |
-| 13 | results/vitpose/transformer_vitpose | window | 0.9700 | 0.8936 | 0.7630 | 0.8232 | 0.9429 | 689 | 82 | 214 | 8881 | seed_metrics.csv |
-| 14 | results/vitpose/transformer_vitpose/seed_42 | window | 0.9700 | 0.8936 | 0.7630 | 0.8232 | 0.9429 | 689 | 82 | 214 | 8881 | metrics.txt |
-| 15 | results/ur_origin/mlp | overall | 0.9530 | 0.7077 | 0.8913 | 0.7890 | 0.9763 | 787 | 325 | 96 | 7755 | metrics.txt |
-| 16 | results/vitpose/stgcn | overall | 0.9463 | 0.6451 | 0.9181 | 0.7578 | 0.9884 | 829 | 456 | 74 | 8507 | metrics.txt |
-| 17 | results/combined_ur_le2i_blazepose/mlp | overall | 0.9297 | 0.6806 | 0.8355 | 0.7502 | 0.9659 | 569 | 267 | 112 | 4443 | metrics.txt |
-| 18 | results/combined_ur_le2i_blazepose/rf | overall | 0.9284 | 0.6828 | 0.8091 | 0.7406 | 0.9678 |  |  |  |  | metrics.txt |
-| 19 | results/combined_ur_le2i_blazepose/stgcn | overall | 0.9243 | 0.6567 | 0.8399 | 0.7371 | 0.9605 | 572 | 299 | 109 | 4411 | metrics.txt |
+| 12 | results/combined_ur_le2i_blazepose/transformer_combined_ur_le2i_blazepose | video | 0.8362 | 0.9773 | 0.7611 | 0.8557 | 0.9881 | 86 | 2 | 27 | 62 | seed_metrics.csv |
+| 13 | results/ur_blazepose/lstm | overall | 0.9649 | 0.7759 | 0.8824 | 0.8257 | 0.9469 | 45 | 13 | 6 | 477 | metrics.txt |
+| 14 | results/vitpose/transformer_vitpose | window | 0.9700 | 0.8936 | 0.7630 | 0.8232 | 0.9429 | 689 | 82 | 214 | 8881 | seed_metrics.csv |
+| 15 | results/vitpose/transformer_vitpose/seed_42 | window | 0.9700 | 0.8936 | 0.7630 | 0.8232 | 0.9429 | 689 | 82 | 214 | 8881 | metrics.txt |
+| 16 | results/ur_origin/mlp | overall | 0.9530 | 0.7077 | 0.8913 | 0.7890 | 0.9763 | 787 | 325 | 96 | 7755 | metrics.txt |
+| 17 | results/vitpose/stgcn | overall | 0.9463 | 0.6451 | 0.9181 | 0.7578 | 0.9884 | 829 | 456 | 74 | 8507 | metrics.txt |
+| 18 | results/combined_ur_le2i_blazepose/stgcn | overall | 0.9354 | 0.6992 | 0.7959 | 0.7444 | 0.9577 | 581 | 250 | 149 | 5193 | metrics.txt |
+| 19 | results/combined_ur_le2i_blazepose/rf | overall | 0.9334 | 0.6874 | 0.8014 | 0.7400 | 0.9680 |  |  |  |  | metrics.txt |
 | 20 | results/le2i_blazepose/rf | overall | 0.9546 | 0.6962 | 0.7760 | 0.7339 | 0.9705 |  |  |  |  | metrics.txt |
 | 21 | results/le2i_blazepose/stgcn | overall | 0.9505 | 0.6520 | 0.8293 | 0.7300 | 0.9725 | 311 | 166 | 64 | 4108 | metrics.txt |
-| 22 | results/blazepose_normalized/lstm/lstm_normalized | overall | 0.9446 | 0.7265 | 0.7010 | 0.7135 | 0.8900 | 619 | 233 | 264 | 7847 | metrics.txt |
-| 23 | results/combined_ur_le2i_blazepose/lstm | overall | 0.9141 | 0.6267 | 0.7915 | 0.6995 | 0.9503 | 539 | 321 | 142 | 4389 | metrics.txt |
-| 24 | results/le2i_blazepose/mlp | overall | 0.9408 | 0.5929 | 0.8507 | 0.6988 | 0.9693 | 319 | 219 | 56 | 4055 | metrics.txt |
-| 25 | results/ur_blazepose/transformer_keypoints_ur | video | 0.8000 | 1 | 0.5333 | 0.6957 | 0.9792 | 16 | 0.0000 | 14 | 40 | seed_metrics.csv |
-| 26 | results/blazepose_normalized/stgcn/stgcn_normalized | overall | 0.9342 | 0.6570 | 0.6942 | 0.6751 | 0.9571 | 613 | 320 | 270 | 7760 | metrics.txt |
-| 27 | results/blazepose_normalized/mlp/mlp_normalized | overall | 0.9279 | 0.6167 | 0.7089 | 0.6596 | 0.8781 | 626 | 389 | 257 | 7691 | metrics.txt |
-| 28 | results/le2i_blazepose/lstm | overall | 0.9157 | 0.4857 | 0.7680 | 0.5950 | 0.9396 | 288 | 305 | 87 | 3969 | metrics.txt |
+| 22 | results/combined_ur_le2i_blazepose/transformer_combined_ur_le2i_blazepose | window | 0.9373 | 0.7526 | 0.7000 | 0.7253 | 0.9544 | 511 | 168 | 219 | 5275 | seed_metrics.csv |
+| 23 | results/combined_ur_le2i_blazepose/transformer_combined_ur_le2i_blazepose/seed_42 | window | 0.9373 | 0.7526 | 0.7000 | 0.7253 | 0.9544 | 511 | 168 | 219 | 5275 | metrics.txt |
+| 24 | results/combined_ur_le2i_blazepose/lstm | overall | 0.9256 | 0.6507 | 0.8014 | 0.7182 | 0.9572 | 585 | 314 | 145 | 5129 | metrics.txt |
+| 25 | results/blazepose_normalized/lstm/lstm_normalized | overall | 0.9446 | 0.7265 | 0.7010 | 0.7135 | 0.8900 | 619 | 233 | 264 | 7847 | metrics.txt |
+| 26 | results/combined_ur_le2i_blazepose/mlp | overall | 0.9184 | 0.6110 | 0.8521 | 0.7117 | 0.9652 | 622 | 396 | 108 | 5047 | metrics.txt |
+| 27 | results/le2i_blazepose/mlp | overall | 0.9408 | 0.5929 | 0.8507 | 0.6988 | 0.9693 | 319 | 219 | 56 | 4055 | metrics.txt |
+| 28 | results/ur_blazepose/transformer_keypoints_ur | video | 0.8000 | 1 | 0.5333 | 0.6957 | 0.9792 | 16 | 0.0000 | 14 | 40 | seed_metrics.csv |
+| 29 | results/blazepose_normalized/stgcn/stgcn_normalized | overall | 0.9342 | 0.6570 | 0.6942 | 0.6751 | 0.9571 | 613 | 320 | 270 | 7760 | metrics.txt |
+| 30 | results/blazepose_normalized/mlp/mlp_normalized | overall | 0.9279 | 0.6167 | 0.7089 | 0.6596 | 0.8781 | 626 | 389 | 257 | 7691 | metrics.txt |
+| 31 | results/le2i_blazepose/lstm | overall | 0.9157 | 0.4857 | 0.7680 | 0.5950 | 0.9396 | 288 | 305 | 87 | 3969 | metrics.txt |
 
 ## 各结果根目录最佳结果
 

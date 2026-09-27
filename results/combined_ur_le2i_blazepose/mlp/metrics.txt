@@ -20,8 +20,7 @@ folds: 5
 seed: 42
 device: cuda:1
 annotation_csv: data/urfall-cam0-falls.csv
-label_level: video
-video_aggregation: mean
+label_level: window
 window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)
 
 [Fold 1.0/5]
@@ -31,15 +30,15 @@ train_windows: 4934.000000
 test_windows: 1239.000000
 best_epoch: 6.000000
 val_f1: 0.742424
-accuracy: 0.485714
-precision: 1.000000
-recall: 0.181818
-f1: 0.307692
-roc_auc: 1.000000
-tn: 13.000000
-fp: 0.000000
-fn: 18.000000
-tp: 4.000000
+accuracy: 0.928168
+precision: 0.635870
+recall: 0.841727
+f1: 0.724458
+roc_auc: 0.974428
+tn: 1033.000000
+fp: 67.000000
+fn: 22.000000
+tp: 117.000000
 
 [Fold 2.0/5]
 train_videos: 141.000000
@@ -48,15 +47,15 @@ train_windows: 4937.000000
 test_windows: 1236.000000
 best_epoch: 5.000000
 val_f1: 0.739300
-accuracy: 0.611111
-precision: 1.000000
-recall: 0.391304
-f1: 0.562500
-roc_auc: 0.946488
-tn: 13.000000
-fp: 0.000000
-fn: 14.000000
-tp: 9.000000
+accuracy: 0.877832
+precision: 0.507407
+recall: 0.883871
+f1: 0.644706
+roc_auc: 0.959172
+tn: 948.000000
+fp: 133.000000
+fn: 18.000000
+tp: 137.000000
 
 [Fold 3.0/5]
 train_videos: 141.000000
@@ -65,15 +64,15 @@ train_windows: 4935.000000
 test_windows: 1238.000000
 best_epoch: 12.000000
 val_f1: 0.751938
-accuracy: 0.527778
-precision: 1.000000
-recall: 0.260870
-f1: 0.413793
-roc_auc: 0.839465
-tn: 13.000000
-fp: 0.000000
-fn: 17.000000
-tp: 6.000000
+accuracy: 0.907916
+precision: 0.562500
+recall: 0.887324
+f1: 0.688525
+roc_auc: 0.965669
+tn: 998.000000
+fp: 98.000000
+fn: 16.000000
+tp: 126.000000
 
 [Fold 4.0/5]
 train_videos: 142.000000
@@ -82,15 +81,15 @@ train_windows: 4939.000000
 test_windows: 1234.000000
 best_epoch: 8.000000
 val_f1: 0.737288
-accuracy: 0.457143
-precision: 1.000000
-recall: 0.136364
-f1: 0.240000
-roc_auc: 0.888112
-tn: 13.000000
-fp: 0.000000
-fn: 19.000000
-tp: 3.000000
+accuracy: 0.934360
+precision: 0.662857
+recall: 0.840580
+f1: 0.741214
+roc_auc: 0.968099
+tn: 1037.000000
+fp: 59.000000
+fn: 22.000000
+tp: 116.000000
 
 [Fold 5.0/5]
 train_videos: 142.000000
@@ -99,46 +98,46 @@ train_windows: 4947.000000
 test_windows: 1226.000000
 best_epoch: 18.000000
 val_f1: 0.746988
-accuracy: 0.428571
-precision: 1.000000
-recall: 0.130435
-f1: 0.230769
-roc_auc: 1.000000
-tn: 12.000000
-fp: 0.000000
-fn: 20.000000
-tp: 3.000000
+accuracy: 0.943719
+precision: 0.763636
+recall: 0.807692
+f1: 0.785047
+roc_auc: 0.971813
+tn: 1031.000000
+fp: 39.000000
+fn: 30.000000
+tp: 126.000000
 
 ================================================================================
 OVERALL OUT-OF-FOLD METRICS
 ================================================================================
-accuracy: 0.502825
-precision: 1.000000
-recall: 0.221239
-f1: 0.362319
-roc_auc: 0.930171
-tn: 64
-fp: 0
-fn: 88
-tp: 25
+accuracy: 0.918354
+precision: 0.611002
+recall: 0.852055
+f1: 0.711670
+roc_auc: 0.965219
+tn: 5047
+fp: 396
+fn: 108
+tp: 622
 
 Classification report:
               precision    recall  f1-score   support
 
-         ADL     0.4211    1.0000    0.5926        64
-        Fall     1.0000    0.2212    0.3623       113
+         ADL     0.9790    0.9272    0.9524      5443
+        Fall     0.6110    0.8521    0.7117       730
 
-    accuracy                         0.5028       177
-   macro avg     0.7105    0.6106    0.4775       177
-weighted avg     0.7907    0.5028    0.4456       177
+    accuracy                         0.9184      6173
+   macro avg     0.7950    0.8897    0.8321      6173
+weighted avg     0.9355    0.9184    0.9240      6173
 
 Confusion matrix [[TN, FP], [FN, TP]]:
-[[64  0]
- [88 25]]
+[[5047  396]
+ [ 108  622]]
 
 Fold mean +/- std:
-accuracy: 0.502063 +/- 0.071132
-precision: 1.000000 +/- 0.000000
-recall: 0.220158 +/- 0.108961
-f1: 0.350951 +/- 0.139039
-roc_auc: 0.934813 +/- 0.070547
+accuracy: 0.918399 +/- 0.026205
+precision: 0.626454 +/- 0.098101
+recall: 0.852239 +/- 0.033401
+f1: 0.716790 +/- 0.053173
+roc_auc: 0.967836 +/- 0.005897

@@ -9,90 +9,89 @@ features: 1980
 window_seconds: 1.0
 window_stride: 1
 folds: 5
-label_level: video
-video_aggregation: mean
+label_level: window
 
 [Fold 1.0/5]
 train_videos: 142.000000
 test_videos: 35.000000
 train_windows: 4934.000000
 test_windows: 1239.000000
-accuracy: 0.514286
-precision: 1.000000
-recall: 0.227273
-f1: 0.370370
-roc_auc: 0.986014
+accuracy: 0.941889
+precision: 0.700599
+recall: 0.841727
+f1: 0.764706
+roc_auc: 0.976678
 
 [Fold 2.0/5]
 train_videos: 141.000000
 test_videos: 36.000000
 train_windows: 4937.000000
 test_windows: 1236.000000
-accuracy: 0.555556
-precision: 1.000000
-recall: 0.304348
-f1: 0.466667
-roc_auc: 0.909699
+accuracy: 0.930421
+precision: 0.694915
+recall: 0.793548
+f1: 0.740964
+roc_auc: 0.962221
 
 [Fold 3.0/5]
 train_videos: 141.000000
 test_videos: 36.000000
 train_windows: 4935.000000
 test_windows: 1238.000000
-accuracy: 0.500000
-precision: 1.000000
-recall: 0.217391
-f1: 0.357143
-roc_auc: 0.859532
+accuracy: 0.911147
+precision: 0.588889
+recall: 0.746479
+f1: 0.658385
+roc_auc: 0.950785
 
 [Fold 4.0/5]
 train_videos: 142.000000
 test_videos: 35.000000
 train_windows: 4939.000000
 test_windows: 1234.000000
-accuracy: 0.542857
-precision: 1.000000
-recall: 0.272727
-f1: 0.428571
-roc_auc: 0.895105
+accuracy: 0.933549
+precision: 0.670732
+recall: 0.797101
+f1: 0.728477
+roc_auc: 0.970757
 
 [Fold 5.0/5]
 train_videos: 142.000000
 test_videos: 35.000000
 train_windows: 4947.000000
 test_windows: 1226.000000
-accuracy: 0.457143
-precision: 1.000000
-recall: 0.173913
-f1: 0.296296
-roc_auc: 1.000000
+accuracy: 0.950245
+precision: 0.791411
+recall: 0.826923
+f1: 0.808777
+roc_auc: 0.982456
 
 ================================================================================
 OVERALL OUT-OF-FOLD METRICS
 ================================================================================
-accuracy: 0.514124
-precision: 1.000000
-recall: 0.238938
-f1: 0.385714
-roc_auc: 0.935426
+accuracy: 0.933420
+precision: 0.687427
+recall: 0.801370
+f1: 0.740038
+roc_auc: 0.967973
 
 Classification report:
               precision    recall  f1-score   support
 
-         ADL     0.4267    1.0000    0.5981        64
-        Fall     1.0000    0.2389    0.3857       113
+         ADL     0.9728    0.9511    0.9618      5443
+        Fall     0.6874    0.8014    0.7400       730
 
-    accuracy                         0.5141       177
-   macro avg     0.7133    0.6195    0.4919       177
-weighted avg     0.7927    0.5141    0.4625       177
+    accuracy                         0.9334      6173
+   macro avg     0.8301    0.8762    0.8509      6173
+weighted avg     0.9390    0.9334    0.9356      6173
 
 Confusion matrix [[TN, FP], [FN, TP]]:
-[[64  0]
- [86 27]]
+[[5177  266]
+ [ 145  585]]
 
 Fold mean +/- std:
-accuracy: 0.513968 +/- 0.038692
-precision: 1.000000 +/- 0.000000
-recall: 0.239130 +/- 0.050618
-f1: 0.383810 +/- 0.065991
-roc_auc: 0.930070 +/- 0.060484
+accuracy: 0.933450 +/- 0.014662
+precision: 0.689309 +/- 0.072479
+recall: 0.801156 +/- 0.036653
+f1: 0.740262 +/- 0.055080
+roc_auc: 0.968579 +/- 0.012449
