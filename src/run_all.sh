@@ -9,6 +9,7 @@ set -euo pipefail
 #   --keypoints ur-origin            -> results/ur_origin/{rf,mlp,lstm,stgcn}
 #   --keypoints blazepose-normalized -> results/blazepose_normalized/{model}/{model_normalized}
 #   --keypoints le2i-blazepose       -> results/le2i_blazepose/{rf,mlp,lstm,stgcn}
+#   --keypoints le2i-blazepose-normalized -> results/le2i_blazepose_normalized/{rf,mlp,lstm,stgcn}
 KEYPOINTS_PROFILES=("ur")
 DATA_ROOT="data/keypoints_ur"
 OUTPUT_ROOT="results/ur"
@@ -35,7 +36,7 @@ usage() {
 Usage: bash src/run_all.sh [options]
 
 Options:
-  --keypoints NAME[,NAME] Built-in profile(s): ur, ur-origin, blazepose-normalized, le2i-blazepose
+  --keypoints NAME[,NAME] Built-in profile(s): ur, ur-origin, blazepose-normalized, le2i-blazepose, le2i-blazepose-normalized
   --data-root PATH        Override keypoint NPZ root
   --output-root PATH      Override output root
   --windows-cache PATH    Override shared windows cache path
@@ -91,6 +92,15 @@ apply_keypoints_profile() {
       DATA_ROOT="data/keypoints_le2i"
       OUTPUT_ROOT="results/le2i_blazepose"
       WINDOWS_CACHE="data/windows/keypoints_le2i_windows.npz"
+      WINDOW_SIZE="25"
+      STRIDE="5"
+      FPS="25"
+      NEST_OUTPUT_BY_MODEL="0"
+      ;;
+    le2i-normalized|le2i-blazepose-normalized|blazepose-le2i-normalized)
+      DATA_ROOT="data/keypoints_le2i_normalized"
+      OUTPUT_ROOT="results/le2i_blazepose_normalized"
+      WINDOWS_CACHE="data/windows/keypoints_le2i_normalized_windows.npz"
       WINDOW_SIZE="25"
       STRIDE="5"
       FPS="25"
