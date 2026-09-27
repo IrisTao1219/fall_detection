@@ -751,11 +751,13 @@ def main():
     ]
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(x, split_y, groups), 1):
-        train_groups = set(groups[train_idx])
-        test_groups = set(groups[test_idx])
-        overlap = train_groups & test_groups
-        if overlap:
-            raise RuntimeError(f"Video leakage detected: {sorted(overlap)[:5]}")
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_idx,
+            test_idx,
+            "outer_train",
+            "outer_test",
+        )
 
         print("\n" + "=" * 72)
         print(

@@ -367,7 +367,7 @@ def main():
     joint_count = int(cache_config.get("joint_count", x.shape[-1] // 2))
     # 一个 fall 视频现在可能同时包含 ADL/Fall 窗口，因此外层 fold 按原始
     # UR-Fall 视频类型分层，训练和评估仍使用窗口级 y。
-    split_y = video_type_labels(groups)
+    split_y = experiment_common.group_stratification_labels(y, groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
         .drop_duplicates("group")
@@ -389,8 +389,13 @@ def main():
 
     split_rows = []
     for fold, (train_idx, test_idx) in enumerate(split_indices, 1):
-        if set(groups[train_idx]) & set(groups[test_idx]):
-            raise RuntimeError("Training and test videos overlap")
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_idx,
+            test_idx,
+            "outer_train",
+            "outer_test",
+        )
         for role, indices in (("outer_train", train_idx), ("outer_test", test_idx)):
             for video_id in np.unique(groups[indices]):
                 split_rows.append({"fold": fold, "video_id": video_id, "role": role})

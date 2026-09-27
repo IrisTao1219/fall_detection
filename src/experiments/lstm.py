@@ -638,11 +638,13 @@ def run_model_cv(
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
-        train_groups = set(groups[train_idx])
-        test_groups = set(groups[test_idx])
-        overlap = train_groups & test_groups
-        if overlap:
-            raise RuntimeError(f"Video leakage detected: {sorted(overlap)[:5]}")
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_idx,
+            test_idx,
+            "outer_train",
+            "outer_test",
+        )
 
         # Fit standardizer ONLY on this fold's training data.
         scaler = SequenceStandardizer.fit(X[train_idx])

@@ -46,6 +46,7 @@ LABEL_MAP = {
 CLASS_NAMES = ["ADL", "Fall"]
 
 FALL_ANNOTATION_CSV = Path("data/urfall-cam0-falls.csv")
+FALL_WINDOW_RATIO_THRESHOLD = 0.3
 
 
 @dataclass
@@ -181,6 +182,28 @@ def group_stratification_labels(y: np.ndarray, groups: np.ndarray) -> np.ndarray
     return np.asarray([group_to_aux[str(group)] for group in groups], dtype=np.int64)
 
 
+def assert_disjoint_groups(
+    groups: np.ndarray,
+    left_idx: np.ndarray,
+    right_idx: np.ndarray,
+    left_name: str = "train",
+    right_name: str = "test",
+) -> None:
+    """Fail fast if two splits share any original video/group id."""
+    groups = np.asarray(groups).astype(str)
+    left_groups = set(groups[left_idx])
+    right_groups = set(groups[right_idx])
+    overlap = sorted(left_groups & right_groups)
+    if overlap:
+        preview = ", ".join(overlap[:10])
+        if len(overlap) > 10:
+            preview += ", ..."
+        raise RuntimeError(
+            f"Video-level data leakage detected between {left_name} and "
+            f"{right_name}: {preview}"
+        )
+
+
 def load_fall_frame_labels(csv_path: Path) -> Dict[str, Dict[int, int]]:
     """从前三列读取 UR-Fall 官方逐帧姿态标签。"""
     csv_path = Path(csv_path)
@@ -228,6 +251,7 @@ def load_fall_frame_labels(csv_path: Path) -> Dict[str, Dict[int, int]]:
 
 def get_window_label_from_urfall(
     frame_labels: Sequence[Optional[int]],
+    fall_ratio_threshold: float = FALL_WINDOW_RATIO_THRESHOLD,
 ) -> Optional[int]:
     """按“跌倒事件”而不是“倒地姿态”给 UR-Fall 窗口标注。
 
@@ -237,13 +261,11 @@ def get_window_label_from_urfall(
       -  1：跌倒后的躺地状态
 
     新窗口规则：
-      - 窗口中心位于原始标签 0 的跌倒过渡阶段 -> Fall = 1
-      - 整个窗口完全不包含原始标签 0              -> Non-fall = 0
-      - 窗口包含原始标签 0，但中心不在过渡阶段    -> None（忽略）
-      - 整个窗口都没有有效逐帧标注                  -> None（忽略）
+      - 有效标注中 0 占比达到阈值 -> Fall = 1
+      - 否则 -> Non-fall = 0
+      - 整个窗口都没有有效逐帧标注 -> None（忽略）
 
-    偶数长度窗口的中心位于两个中间帧之间；只有两个中间帧都为 0 时，
-    才认为中心明确位于跌倒过渡阶段。
+    因此窗口只要包含相当一部分跌倒过渡过程，就算 fall。
     """
     labels = list(frame_labels)
     if not labels:
@@ -252,23 +274,9 @@ def get_window_label_from_urfall(
     if not valid_labels:
         return None
 
-    # 完全没有跌倒过渡帧 0：Non-fall。
-    # 因此正常阶段 -1 和跌倒后的躺地阶段 1 都不再直接作为 Fall 正类。
-    if 0 not in valid_labels:
-        return 0
-    window_size = len(labels)
-    if window_size % 2 == 1:
-        center_labels = [labels[window_size // 2]]
-    else:
-        center_labels = [
-            labels[window_size // 2 - 1],
-            labels[window_size // 2],
-        ]
-    if all(label == 0 for label in center_labels):
-        return 1
-
-    # 窗口碰到跌倒事件，但中心不在事件内部：边界窗口，忽略。
-    return None
+    transition_count = int(sum(label == 0 for label in valid_labels))
+    transition_ratio = transition_count / len(valid_labels)
+    return 1 if transition_ratio >= fall_ratio_threshold else 0
 
 
 def interpolate_1d(values: np.ndarray) -> np.ndarray:
@@ -748,12 +756,13 @@ def make_frame_label_windows(
     valid_mask: Optional[np.ndarray] = None,
     min_valid_frames: int = 1,
     missing_mode: str = "interp",
+    fall_ratio_threshold: float = FALL_WINDOW_RATIO_THRESHOLD,
 ) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
     """Generate windows from binary frame labels.
 
-    The window label is the center frame label. Boundary or unknown labels
-    (<0) are skipped. This matches Le2i NPZ files produced by
-    blazepose_le2i.py, where videos can contain both classes.
+    A window is positive if a sufficient fraction of valid frame labels are
+    fall. Unknown labels (<0) are ignored; windows with no known labels are
+    skipped.
     """
     frame_count = features.shape[0]
     if frame_count < window_size:
@@ -777,10 +786,12 @@ def make_frame_label_windows(
             valid_count = int(np.count_nonzero(valid_mask[start:end]))
             if valid_count < min_valid_frames:
                 continue
-        center = start + window_size // 2
-        label = int(labels[center])
-        if label not in (0, 1):
+        window_labels = labels[start:end].astype(np.int64)
+        known_labels = window_labels[(window_labels == 0) | (window_labels == 1)]
+        if known_labels.size == 0:
             continue
+        fall_ratio = float(np.mean(known_labels == 1))
+        label = 1 if fall_ratio >= fall_ratio_threshold else 0
         x_win = fill_missing_temporally(features[start:end], missing_mode)
         x_list.append(x_win.astype(np.float32))
         y_list.append(label)
@@ -912,6 +923,7 @@ def inner_group_split_by_video_type(
         random_state=seed,
     )
     for fit_idx, val_idx in splitter.split(np.zeros(len(y)), split_y, groups):
+        assert_disjoint_groups(groups, fit_idx, val_idx, "inner_train", "inner_val")
         if len(np.unique(y[fit_idx])) == 2 and len(np.unique(y[val_idx])) == 2:
             return fit_idx, val_idx
     raise ValueError(

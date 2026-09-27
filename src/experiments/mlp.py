@@ -452,8 +452,13 @@ def main():
     predictions, fold_rows = [], []
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(x, split_y, groups), 1):
-        if set(groups[train_idx]) & set(groups[test_idx]):
-            raise RuntimeError("Training and test videos overlap")
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_idx,
+            test_idx,
+            "outer_train",
+            "outer_test",
+        )
         model, mean, std, best_epoch, val_f1, history, (fit_idx, val_idx) = train_fold(
             x[train_idx], y[train_idx], groups[train_idx], args, device, args.seed + fold
         )
