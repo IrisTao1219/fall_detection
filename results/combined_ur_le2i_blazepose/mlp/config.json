@@ -21,6 +21,7 @@
   "device": "cuda:1",
   "experiment_output_dir": "results/combined_ur_le2i_blazepose/mlp",
   "annotation_csv": "data/urfall-cam0-falls.csv",
-  "label_level": "window",
+  "label_level": "video",
+  "video_aggregation": "mean",
   "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
 }
