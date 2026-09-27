@@ -34,28 +34,45 @@ def _jsonable_config(config: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(config, ensure_ascii=False, default=str))
 
 
+def resample_time_axis(x: np.ndarray, target_frames: int) -> np.ndarray:
+    """Linearly resample [N, T, D] windows to a shared temporal length."""
+    if x.ndim != 3:
+        raise ValueError(f"Expected window tensor [N, T, D], got {x.shape}")
+    source_frames = int(x.shape[1])
+    if source_frames == target_frames:
+        return x.astype(np.float32, copy=False)
+    source_grid = np.linspace(0.0, 1.0, source_frames)
+    target_grid = np.linspace(0.0, 1.0, target_frames)
+    flat = x.reshape(-1, source_frames)
+    out = np.empty((flat.shape[0], target_frames), dtype=np.float32)
+    for row_index, row in enumerate(flat):
+        out[row_index] = np.interp(target_grid, source_grid, row)
+    return out.reshape(x.shape[0], target_frames, x.shape[2])
+
+
 def main() -> None:
     args = parse_args()
+    loaded = []
+    for name, cache_path in args.input:
+        loaded.append((name, *experiment_common.load_windows_cache(cache_path)))
+
+    target_frames = max(int(x.shape[1]) for _, x, *_ in loaded)
     xs = []
     ys = []
     groups = []
     records = []
     configs = {}
-    reference_shape = None
     reference_joint_count = None
     reference_feature_dim = None
 
-    for name, cache_path in args.input:
-        x, y, group, record, config = experiment_common.load_windows_cache(cache_path)
-        if reference_shape is None:
-            reference_shape = x.shape[1:]
+    for name, x, y, group, record, config in loaded:
+        if reference_joint_count is None:
             reference_joint_count = config.get("joint_count")
             reference_feature_dim = config.get("feature_dim", x.shape[-1])
-        elif x.shape[1:] != reference_shape:
+        elif x.shape[-1] != reference_feature_dim:
             raise ValueError(
-                f"Cannot combine {name}: window shape {x.shape[1:]} does not "
-                f"match {reference_shape}. Use a common --window-size and "
-                "--feature-mode before combining."
+                f"Cannot combine {name}: feature_dim={x.shape[-1]} does not "
+                f"match {reference_feature_dim}."
             )
         if config.get("joint_count") != reference_joint_count:
             raise ValueError(
@@ -67,6 +84,8 @@ def main() -> None:
                 f"Cannot combine {name}: feature_dim={config.get('feature_dim')} "
                 f"does not match {reference_feature_dim}."
             )
+        original_frames = int(x.shape[1])
+        x = resample_time_axis(x, target_frames)
 
         prefix = str(name)
         prefixed_groups = np.asarray([f"{prefix}::{item}" for item in group])
@@ -78,7 +97,10 @@ def main() -> None:
         ys.append(y)
         groups.append(prefixed_groups)
         records.append(record)
-        configs[prefix] = _jsonable_config(config)
+        config = _jsonable_config(config)
+        config["combined_original_window_frames"] = original_frames
+        config["combined_resampled_window_frames"] = target_frames
+        configs[prefix] = config
 
     combined_x = np.concatenate(xs, axis=0)
     combined_y = np.concatenate(ys, axis=0)
@@ -90,6 +112,8 @@ def main() -> None:
         "source_configs": configs,
         "joint_count": reference_joint_count,
         "feature_dim": reference_feature_dim,
+        "window_resampling": "linear_time_axis_to_max_source_window_frames",
+        "target_window_frames": target_frames,
         "shape": list(combined_x.shape),
         "windows": int(len(combined_x)),
         "adl_windows": int((combined_y == 0).sum()),

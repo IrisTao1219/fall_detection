@@ -533,7 +533,8 @@ def main():
         summary,
         filename="summary_metrics.txt",
     )
-    overall = _metrics_frame(prediction_frame)
+    video_prediction_frame = pd.concat(all_video_predictions, ignore_index=True)
+    overall = _metrics_frame(video_prediction_frame)
     metrics_header = [
         f"data_root: {args.data_root}",
         f"pose_estimator: {args.pose_estimator}",
@@ -560,7 +561,7 @@ def main():
         f"seeds: {args.seeds}",
         f"split_seed: {args.split_seed}",
         f"device: {device}",
-        "label_level: window",
+        "label_level: video",
         "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
     ]
     save_experiment_metrics_text(
@@ -569,8 +570,8 @@ def main():
         header=metrics_header,
         fold_rows=fold_frame,
         overall=overall,
-        y_true=prediction_frame["label"].to_numpy(),
-        y_pred=prediction_frame["y_pred"].to_numpy(),
+        y_true=video_prediction_frame["label"].to_numpy(),
+        y_pred=video_prediction_frame["y_pred"].to_numpy(),
     )
     save_experiment_metrics_json(
         output=output,
