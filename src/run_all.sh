@@ -41,7 +41,7 @@ usage() {
 Usage: bash src/run_all.sh [options]
 
 Options:
-  --keypoints NAME[,NAME] Built-in profile(s): ur, ur-origin, blazepose-normalized, le2i-blazepose, le2i-blazepose-normalized, ur-vitpose, le2i-vitpose
+  --keypoints NAME[,NAME] Built-in profile(s): ur-blazepose, ur, ur-origin, blazepose-normalized, le2i-blazepose, le2i-blazepose-normalized, ur-vitpose, le2i-vitpose
   --data-root PATH        Override keypoint NPZ root
   --output-root PATH      Override output root
   --windows-cache PATH    Override shared windows cache path
@@ -58,7 +58,7 @@ Current default:
   data/keypoints_ur_blazepose -> results/ur/{rf,mlp,lstm,stgcn}
 
 Examples:
-  bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
+  bash src/run_all.sh --keypoints ur-blazepose,le2i-blazepose --combine-datasets
   bash src/run_all.sh --keypoints ur-vitpose,le2i-vitpose --combine-datasets
   bash src/run_all.sh --keypoints ur --device cuda:0
 EOF
@@ -71,6 +71,18 @@ apply_keypoints_profile() {
       DATA_ROOT="data/keypoints_ur_blazepose"
       OUTPUT_ROOT="results/ur"
       WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
+      WINDOW_SIZE="30"
+      STRIDE="6"
+      FPS="30"
+      NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
+      ;;
+    ur-blazepose|blazepose-ur)
+      DATA_ROOT="data/keypoints_ur_blazepose"
+      OUTPUT_ROOT="results/ur_blazepose"
+      WINDOWS_CACHE="data/windows/keypoints_ur_blazepose_windows.npz"
       WINDOW_SIZE="30"
       STRIDE="6"
       FPS="30"
@@ -268,7 +280,7 @@ done
 if [[ "${#KEYPOINTS_PROFILES[@]}" -gt 1 ]]; then
   if [[ -n "$DATA_ROOT_OVERRIDE" || -n "$OUTPUT_ROOT_OVERRIDE" || -n "$WINDOWS_CACHE_OVERRIDE" ]]; then
     echo "--data-root, --output-root and --windows-cache are only supported with one --keypoints profile." >&2
-    echo "Use built-in profiles for multi-dataset runs, e.g. --keypoints ur,le2i-blazepose --combine-datasets." >&2
+    echo "Use built-in profiles for multi-dataset runs, e.g. --keypoints ur-blazepose,le2i-blazepose --combine-datasets." >&2
     exit 1
   fi
 fi

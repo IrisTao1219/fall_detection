@@ -59,7 +59,7 @@ bash src/run_all.sh --keypoints blazepose-normalized
 如果要把两个数据集合并成一个联合数据集一起训练和测试，可以用逗号分隔多个 profile，并加上 `--combine-datasets`。脚本会先用相同窗口参数分别生成缓存，再合并为一个窗口缓存，最后只运行一套 RF、MLP、LSTM 和 ST-GCN：
 
 ```bash
-bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
+bash src/run_all.sh --keypoints ur-blazepose,le2i-blazepose --combine-datasets
 ```
 
 联合结果默认写入 `results/combined_ur_le2i_blazepose/{rf,mlp,lstm,stgcn}`，联合窗口缓存写入 `data/windows/combined_ur_le2i_blazepose_windows.npz`。合并模式默认按相同秒数生成窗口：窗口长度 1 秒、步长 0.2 秒；因此 UR-Fall 使用 30/6 帧，Le2i 使用 25/5 帧。合并缓存时会把不同 FPS 得到的窗口沿时间轴线性重采样到统一帧数，便于模型一起训练。合并时会给每个 `video_id` 加数据集前缀，例如 `ur::fall-01-cam0-rgb`，防止不同数据集视频名碰撞；交叉验证仍按前缀后的原始视频分组，避免同一视频的窗口跨训练折和测试折。RF、MLP、LSTM、ST-GCN 和 Transformer 的最终汇总指标均按窗口级预测计算。
