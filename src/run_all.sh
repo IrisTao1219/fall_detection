@@ -10,6 +10,8 @@ set -euo pipefail
 #   --keypoints blazepose-normalized -> results/blazepose_normalized/{model}/{model_normalized}
 #   --keypoints le2i-blazepose       -> results/le2i_blazepose/{rf,mlp,lstm,stgcn}
 #   --keypoints le2i-blazepose-normalized -> results/le2i_blazepose_normalized/{rf,mlp,lstm,stgcn}
+#   --keypoints ur-vitpose           -> results/ur_vitpose/{rf,mlp,lstm,stgcn,transformer}
+#   --keypoints le2i-vitpose         -> results/le2i_vitpose/{rf,mlp,lstm,stgcn,transformer}
 KEYPOINTS_PROFILES=("ur")
 DATA_ROOT="data/keypoints_ur"
 OUTPUT_ROOT="results/ur"
@@ -21,6 +23,9 @@ FPS="30"
 WINDOW_SECONDS="1"
 STRIDE_SECONDS="0.2"
 NEST_OUTPUT_BY_MODEL="0"
+KEYPOINT_ADAPTER="blazepose"
+FEATURE_MODE="xy66"
+VISIBILITY_THRESHOLD="0.3"
 DATA_ROOT_OVERRIDE=""
 OUTPUT_ROOT_OVERRIDE=""
 WINDOWS_CACHE_OVERRIDE=""
@@ -36,7 +41,7 @@ usage() {
 Usage: bash src/run_all.sh [options]
 
 Options:
-  --keypoints NAME[,NAME] Built-in profile(s): ur, ur-origin, blazepose-normalized, le2i-blazepose, le2i-blazepose-normalized
+  --keypoints NAME[,NAME] Built-in profile(s): ur, ur-origin, blazepose-normalized, le2i-blazepose, le2i-blazepose-normalized, ur-vitpose, le2i-vitpose
   --data-root PATH        Override keypoint NPZ root
   --output-root PATH      Override output root
   --windows-cache PATH    Override shared windows cache path
@@ -54,6 +59,7 @@ Current default:
 
 Examples:
   bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
+  bash src/run_all.sh --keypoints ur-vitpose,le2i-vitpose --combine-datasets
   bash src/run_all.sh --keypoints ur --device cuda:0
 EOF
 }
@@ -69,6 +75,9 @@ apply_keypoints_profile() {
       STRIDE="6"
       FPS="30"
       NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
       ;;
     ur-origin)
       DATA_ROOT="data/keypoints"
@@ -78,6 +87,9 @@ apply_keypoints_profile() {
       STRIDE="6"
       FPS="30"
       NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
       ;;
     blazepose-normalized)
       DATA_ROOT="data/keypoints_ur_normalized"
@@ -87,6 +99,21 @@ apply_keypoints_profile() {
       STRIDE="6"
       FPS="30"
       NEST_OUTPUT_BY_MODEL="1"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
+      ;;
+    ur-vitpose|vitpose-ur)
+      DATA_ROOT="data/keypoints_ur_vitpose"
+      OUTPUT_ROOT="results/ur_vitpose"
+      WINDOWS_CACHE="data/windows/keypoints_ur_vitpose_windows.npz"
+      WINDOW_SIZE="30"
+      STRIDE="6"
+      FPS="30"
+      NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="vitpose"
+      FEATURE_MODE="xy"
+      VISIBILITY_THRESHOLD="0.3"
       ;;
     le2i|le2i-blazepose|blazepose-le2i)
       DATA_ROOT="data/keypoints_le2i"
@@ -96,6 +123,9 @@ apply_keypoints_profile() {
       STRIDE="5"
       FPS="25"
       NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
       ;;
     le2i-normalized|le2i-blazepose-normalized|blazepose-le2i-normalized)
       DATA_ROOT="data/keypoints_le2i_normalized"
@@ -105,6 +135,21 @@ apply_keypoints_profile() {
       STRIDE="5"
       FPS="25"
       NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="blazepose"
+      FEATURE_MODE="xy66"
+      VISIBILITY_THRESHOLD="0.3"
+      ;;
+    le2i-vitpose|vitpose-le2i)
+      DATA_ROOT="data/keypoints_le2i_vitpose"
+      OUTPUT_ROOT="results/le2i_vitpose"
+      WINDOWS_CACHE="data/windows/keypoints_le2i_vitpose_windows.npz"
+      WINDOW_SIZE="25"
+      STRIDE="5"
+      FPS="25"
+      NEST_OUTPUT_BY_MODEL="0"
+      KEYPOINT_ADAPTER="vitpose"
+      FEATURE_MODE="xy"
+      VISIBILITY_THRESHOLD="0.3"
       ;;
     *)
       echo "Unknown keypoints profile: $profile" >&2
@@ -266,13 +311,18 @@ run_profile() {
   echo "Output: $WINDOWS_CACHE"
   echo "Window size: $WINDOW_SIZE"
   echo "Stride: $STRIDE"
+  echo "Keypoint adapter: $KEYPOINT_ADAPTER"
+  echo "Feature mode: $FEATURE_MODE"
   echo "========================================"
 
   uv run python "src/prepare_windows.py" \
     --data-root "$DATA_ROOT" \
     --output "$WINDOWS_CACHE" \
     --window-size "$WINDOW_SIZE" \
-    --stride "$STRIDE"
+    --stride "$STRIDE" \
+    --keypoint-adapter "$KEYPOINT_ADAPTER" \
+    --feature-mode "$FEATURE_MODE" \
+    --visibility-threshold "$VISIBILITY_THRESHOLD"
 
   for EXP in "${EXPERIMENTS[@]}"; do
     EXP_OUTPUT_ROOT="$OUTPUT_ROOT"
@@ -413,13 +463,18 @@ run_combined_profiles() {
     echo "Window size: $WINDOW_SIZE"
     echo "Stride: $STRIDE"
     echo "FPS: $FPS"
+    echo "Keypoint adapter: $KEYPOINT_ADAPTER"
+    echo "Feature mode: $FEATURE_MODE"
     echo "----------------------------------------"
 
     uv run python "src/prepare_windows.py" \
       --data-root "$DATA_ROOT" \
       --output "$WINDOWS_CACHE" \
       --window-size "$WINDOW_SIZE" \
-      --stride "$STRIDE"
+      --stride "$STRIDE" \
+      --keypoint-adapter "$KEYPOINT_ADAPTER" \
+      --feature-mode "$FEATURE_MODE" \
+      --visibility-threshold "$VISIBILITY_THRESHOLD"
 
     combine_args+=(--input "$PROFILE" "$WINDOWS_CACHE")
   done

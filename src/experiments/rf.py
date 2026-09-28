@@ -691,6 +691,17 @@ def save_feature_importance(
     importance = (
         model.feature_importances_
     )
+    feature_dim = int(
+        len(importance)
+        / window_size
+    )
+    coordinate_count = len(
+        COORDINATE_NAMES
+    )
+    joint_count = int(
+        feature_dim
+        / coordinate_count
+    )
 
     names = []
 
@@ -698,7 +709,7 @@ def save_feature_importance(
         window_size
     ):
 
-        for joint in range(33):
+        for joint in range(joint_count):
 
             for coordinate_name in (
                 COORDINATE_NAMES
@@ -709,6 +720,14 @@ def save_feature_importance(
                     f"kp{joint:02d}_"
                     f"{coordinate_name}"
                 )
+
+    if len(names) != len(importance):
+        names = [
+            f"feature_{index:05d}"
+            for index in range(
+                len(importance)
+            )
+        ]
 
     indices = np.argsort(
         importance
