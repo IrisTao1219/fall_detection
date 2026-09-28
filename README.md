@@ -109,13 +109,13 @@ uv run python src/experiments/stgcn.py \
   --windows-cache data/windows/keypoints_ur_vitpose_xyc_windows.npz \
   --output-root results/ur_vitpose \
   --run-name stgcn_xyc_coco17_lite \
-  --architecture coco17-lite \
+  --architecture lite \
   --graph-partition spatial \
   --threshold-objective f1 --min-recall 0.90 \
   --window-size 30 --stride 6 --device cuda:1
 ```
 
-消融实验可分别切回 `--feature-mode xy`、`--architecture baseline` 或 `--graph-partition uniform`。阈值默认保持固定 0.5；`--threshold-objective f1 --min-recall 0.90` 会仅使用每折内层验证集选阈值，不会查看外层测试标签。请使用不同的缓存文件和 `--run-name`，避免覆盖旧基线。
+`--architecture lite` 是通用五层结构，同时支持 BlazePose-33 和 COCO-17；旧的 `coco17-lite` 名称仍作为 ViTPose 兼容别名保留。消融实验可分别切回 `--feature-mode xy`、`--architecture baseline` 或 `--graph-partition uniform`。阈值默认保持固定 0.5；`--threshold-objective f1 --min-recall 0.90` 会仅使用每折内层验证集选阈值，不会查看外层测试标签。请使用不同的缓存文件和 `--run-name`，避免覆盖旧基线。
 
 ### 1. 提取姿态关键点
 

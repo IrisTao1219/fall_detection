@@ -87,7 +87,7 @@ COCO17_EDGES = (
 )
 COCO17_SPATIAL_EDGES = COCO17_EDGES + ((0, 5), (0, 6))
 STGCN_CHANNELS = (64,) * 4 + (128,) * 3 + (256,) * 3
-COCO17_LITE_CHANNELS = (64, 64, 128, 128, 256)
+LITE_CHANNELS = (64, 64, 128, 128, 256)
 TEMPORAL_KERNEL_SIZE = 9
 
 
@@ -687,8 +687,13 @@ def parse_args():
     parser.add_argument("--visibility-threshold", type=float, default=0.3)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument(
-        "--architecture", choices=("baseline", "coco17-lite"), default="baseline",
-        help="baseline keeps the original 10-block model; coco17-lite uses five blocks.",
+        "--architecture",
+        choices=("baseline", "lite", "coco17-lite"),
+        default="baseline",
+        help=(
+            "baseline keeps the original 10-block model; lite uses five blocks "
+            "for either BlazePose-33 or COCO-17; coco17-lite is a compatibility alias."
+        ),
     )
     parser.add_argument(
         "--graph-partition", choices=("uniform", "spatial"), default="uniform",
@@ -768,10 +773,16 @@ def main():
             f"ST-GCN supports XY or XYC input, got {input_channels} channels per joint"
         )
     if args.architecture == "coco17-lite" and joint_count != 17:
-        raise ValueError("--architecture coco17-lite requires COCO/ViTPose 17 joints")
+        raise ValueError(
+            "--architecture coco17-lite is the legacy COCO-17 alias; "
+            "use --architecture lite for BlazePose"
+        )
+    effective_architecture = (
+        "lite" if args.architecture == "coco17-lite" else args.architecture
+    )
     channels = (
-        COCO17_LITE_CHANNELS
-        if args.architecture == "coco17-lite"
+        LITE_CHANNELS
+        if effective_architecture == "lite"
         else STGCN_CHANNELS
     )
     _, graph_description = skeleton_edges(joint_count)
@@ -819,6 +830,7 @@ def main():
             "channels": list(channels),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
             "architecture": args.architecture,
+            "effective_architecture": effective_architecture,
             "graph_partition": args.graph_partition,
             "threshold_objective": args.threshold_objective,
             "threshold": args.threshold,
@@ -860,6 +872,7 @@ def main():
         f"missing_mode: {args.missing_mode}",
         f"visibility_threshold: {args.visibility_threshold}",
         f"architecture: {args.architecture}",
+        f"effective_architecture: {effective_architecture}",
         f"graph_partition: {args.graph_partition}",
         f"threshold_objective: {args.threshold_objective}",
         f"fixed_threshold: {args.threshold}",
@@ -975,6 +988,7 @@ def main():
             "channels": tuple(channels),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
             "architecture": args.architecture,
+            "effective_architecture": effective_architecture,
             "graph_partition": args.graph_partition,
             "threshold": threshold,
             "threshold_objective": args.threshold_objective,
