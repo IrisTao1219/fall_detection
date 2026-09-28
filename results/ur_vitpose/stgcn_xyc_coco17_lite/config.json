@@ -4,12 +4,15 @@
   "output_root": "results/ur_vitpose",
   "run_name": "stgcn_xyc_coco17_lite",
   "window_size": 30,
-  "stride": 6,
+  "stride": 1,
   "missing_mode": "interp",
   "visibility_threshold": 0.3,
   "dropout": 0.3,
   "architecture": "coco17-lite",
   "graph_partition": "spatial",
+  "threshold_objective": "fixed",
+  "threshold": 0.5,
+  "min_recall": 0.0,
   "epochs": 100,
   "patience": 12,
   "batch_size": 64,
@@ -35,5 +38,8 @@
   "graph": "COCO/VitPose 17-joint physical graph",
   "annotation_csv": "data/urfall-cam0-falls.csv",
   "label_level": "window",
-  "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1"
+  "cache_window_size": 30,
+  "cache_stride": 6,
+  "cache_label_rule": "Fall if the fraction of UR-Fall transition label 0 among valid frame labels in the window is >= 0.3; otherwise non-fall.",
+  "urfall_window_label_rule": "Fall if the fraction of UR-Fall transition label 0 among valid frame labels in the window is >= 0.3; otherwise non-fall."
 }
