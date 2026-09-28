@@ -66,7 +66,7 @@ bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
 
 如果只写逗号分隔、但不加 `--combine-datasets`，则表示连续跑多个数据集，结果仍分开保存。
 
-新增的 BlazePose + Le2i keypoints profile 使用 `data/keypoints_le2i/*.npz` 中的逐帧 `frame_labels` 生成窗口标签，结果写入 `results/le2i_blazepose/{rf,mlp,lstm,stgcn}`：
+新增的 BlazePose + Le2i keypoints profile 使用 `data/keypoints_le2i_blazepose/*.npz` 中的逐帧 `frame_labels` 生成窗口标签，结果写入 `results/le2i_blazepose/{rf,mlp,lstm,stgcn}`：
 
 ```bash
 bash src/run_all.sh --keypoints le2i-blazepose
@@ -75,7 +75,7 @@ bash src/run_all.sh --keypoints le2i-blazepose
 如果要先生成 Le2i 的归一化关键点，再用归一化 profile 跑实验：
 
 ```bash
-python src/normalize_keypoints.py --input-root data/keypoints_le2i --output-root data/keypoints_le2i_normalized
+python src/normalize_keypoints.py --input-root data/keypoints_le2i_blazepose --output-root data/keypoints_le2i_normalized
 bash src/run_all.sh --keypoints le2i-blazepose-normalized
 ```
 
@@ -112,7 +112,7 @@ Le2i 原始视频和标注放在 `data/raw_le2i/` 后，先将视频抽成 PNG �
 uv run python src/parse_le2i_annotations.py
 ```
 
-再对抽帧后的 `data/raw_le2i/pngs/` 运行 BlazePose，输出 `data/keypoints_le2i/<video_id>.npz`：
+再对抽帧后的 `data/raw_le2i/pngs/` 运行 BlazePose，输出 `data/keypoints_le2i_blazepose/<video_id>.npz`：
 
 ```bash
 uv run python src/blazepose_le2i.py

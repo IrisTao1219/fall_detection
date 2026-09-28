@@ -606,7 +606,7 @@ def process_video(
 
     output_dir = (
         OUTPUT_ROOT
-        / "keypoints_le2i"
+        / "keypoints_le2i_blazepose"
     )
 
     output_dir.mkdir(
@@ -810,7 +810,7 @@ def main():
 
         output_path = (
             OUTPUT_ROOT
-            / "keypoints_le2i"
+            / "keypoints_le2i_blazepose"
             / f"{video_id}.npz"
         )
 

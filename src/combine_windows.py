@@ -43,11 +43,18 @@ def resample_time_axis(x: np.ndarray, target_frames: int) -> np.ndarray:
         return x.astype(np.float32, copy=False)
     source_grid = np.linspace(0.0, 1.0, source_frames)
     target_grid = np.linspace(0.0, 1.0, target_frames)
-    flat = x.reshape(-1, source_frames)
-    out = np.empty((flat.shape[0], target_frames), dtype=np.float32)
-    for row_index, row in enumerate(flat):
-        out[row_index] = np.interp(target_grid, source_grid, row)
-    return out.reshape(x.shape[0], target_frames, x.shape[2])
+    # Move time to the last axis before flattening so every interpolation row
+    # represents one feature from one window. Reshaping [N, T, D] directly to
+    # [-1, T] would mix adjacent features instead of following them over time.
+    features_by_time = x.transpose(0, 2, 1).reshape(-1, source_frames)
+    resampled = np.empty(
+        (features_by_time.shape[0], target_frames), dtype=np.float32
+    )
+    for row_index, feature in enumerate(features_by_time):
+        resampled[row_index] = np.interp(target_grid, source_grid, feature)
+    return resampled.reshape(
+        x.shape[0], x.shape[2], target_frames
+    ).transpose(0, 2, 1)
 
 
 def main() -> None:

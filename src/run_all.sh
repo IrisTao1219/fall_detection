@@ -13,7 +13,7 @@ set -euo pipefail
 #   --keypoints ur-vitpose           -> results/ur_vitpose/{rf,mlp,lstm,stgcn,transformer}
 #   --keypoints le2i-vitpose         -> results/le2i_vitpose/{rf,mlp,lstm,stgcn,transformer}
 KEYPOINTS_PROFILES=("ur")
-DATA_ROOT="data/keypoints_ur"
+DATA_ROOT="data/keypoints_ur_blazepose"
 OUTPUT_ROOT="results/ur"
 WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
 DEVICE="cuda:1"
@@ -55,7 +55,7 @@ Options:
   -h, --help              Show this help
 
 Current default:
-  data/keypoints_ur -> results/ur/{rf,mlp,lstm,stgcn}
+  data/keypoints_ur_blazepose -> results/ur/{rf,mlp,lstm,stgcn}
 
 Examples:
   bash src/run_all.sh --keypoints ur,le2i-blazepose --combine-datasets
@@ -68,7 +68,7 @@ apply_keypoints_profile() {
   local profile="$1"
   case "$profile" in
     ur)
-      DATA_ROOT="data/keypoints_ur"
+      DATA_ROOT="data/keypoints_ur_blazepose"
       OUTPUT_ROOT="results/ur"
       WINDOWS_CACHE="data/windows/keypoints_ur_windows.npz"
       WINDOW_SIZE="30"
@@ -116,7 +116,7 @@ apply_keypoints_profile() {
       VISIBILITY_THRESHOLD="0.3"
       ;;
     le2i|le2i-blazepose|blazepose-le2i)
-      DATA_ROOT="data/keypoints_le2i"
+      DATA_ROOT="data/keypoints_le2i_blazepose"
       OUTPUT_ROOT="results/le2i_blazepose"
       WINDOWS_CACHE="data/windows/keypoints_le2i_windows.npz"
       WINDOW_SIZE="25"
