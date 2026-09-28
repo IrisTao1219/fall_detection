@@ -339,7 +339,20 @@ def format_number(value: Any) -> str:
 
 def prepare_display(rows: List[Dict[str, Any]], sort_by: str, scope: str) -> List[Dict[str, Any]]:
     """排序、过滤并补充 rank。"""
-    if scope != "all":
+    if scope == "window":
+        # Classical models report their window-level result as "overall",
+        # while Transformer results call the same granularity "window".
+        # Treat both as window-level so video aggregation never enters the
+        # default comparison table.
+        rows = [
+            row for row in rows
+            if re.search(
+                "window|overall",
+                str(row.get("scope", "")),
+                flags=re.IGNORECASE,
+            )
+        ]
+    elif scope != "all":
         rows = [
             row for row in rows
             if scope.lower() in str(row.get("scope", "")).lower()
@@ -514,8 +527,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scope",
         choices=("all", "window", "video", "overall"),
-        default="all",
-        help="打印哪些粒度的结果",
+        default="window",
+        help="打印哪些粒度的结果；window 同时包含传统模型的 overall 窗口指标",
     )
     parser.add_argument(
         "--format",
