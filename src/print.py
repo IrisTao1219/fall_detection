@@ -426,6 +426,58 @@ def print_csv_table(rows: List[Dict[str, Any]]) -> None:
     writer.writerows(output)
 
 
+def result_folder_name(row: Dict[str, Any]) -> str:
+    """返回数据集级结果目录，例如 results/ur_blazepose。"""
+    parts = Path(str(row.get("result", ""))).parts
+    if len(parts) >= 2:
+        return str(Path(parts[0]) / parts[1])
+    return str(Path(*parts)) if parts else "unknown"
+
+
+def group_rows_by_result_folder(
+    rows: List[Dict[str, Any]], sort_by: str
+) -> Dict[str, List[Dict[str, Any]]]:
+    """按数据集级结果目录分组，每组独立排名。"""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        # A seed_N directory is one run of the parent model, not an additional
+        # model. The parent seed_metrics row already represents it.
+        if any(
+            re.fullmatch(r"seed_\d+", part)
+            for part in Path(str(row.get("result", ""))).parts
+        ):
+            continue
+        grouped.setdefault(result_folder_name(row), []).append(row)
+    return {
+        folder: prepare_display(group, sort_by, "all")
+        for folder, group in sorted(grouped.items())
+    }
+
+
+def result_folder_rankings_markdown(
+    rows: List[Dict[str, Any]], sort_by: str
+) -> str:
+    """生成每个数据集结果目录内的模型排名。"""
+    if not rows:
+        return ""
+    lines = ["各实验文件夹模型排序", ""]
+    for folder, group in group_rows_by_result_folder(rows, sort_by).items():
+        lines.extend([f"### `{folder}`", "", markdown_table(group).rstrip(), ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def print_result_folder_rankings(
+    rows: List[Dict[str, Any]], sort_by: str
+) -> None:
+    """在终端分文件夹打印模型排名。"""
+    if not rows:
+        return
+    print("\n各实验文件夹模型排序：")
+    for folder, group in group_rows_by_result_folder(rows, sort_by).items():
+        print(f"\n[{folder}]")
+        print_text_table(group)
+
+
 def print_best_by_root(rows: List[Dict[str, Any]], sort_by: str) -> None:
     """按 results/results_normalized/results-old 分组打印最佳窗口级结果。"""
     if not rows:
@@ -547,6 +599,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="不打印各结果根目录最佳结果",
     )
+    parser.add_argument(
+        "--no-folder-rankings",
+        action="store_true",
+        help="不打印每个数据集结果文件夹内的模型排名",
+    )
     return parser
 
 
@@ -572,6 +629,12 @@ def main() -> None:
             best_section = best_by_root_markdown(frame, args.sort_by).rstrip()
             if best_section:
                 content_lines.extend([best_section, ""])
+        if not args.no_folder_rankings:
+            folder_section = result_folder_rankings_markdown(
+                display, args.sort_by
+            ).rstrip()
+            if folder_section:
+                content_lines.extend(["## " + folder_section, ""])
         content = "\n".join(content_lines).rstrip() + "\n"
         output_path = args.output or Path("results_summary.md")
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -584,6 +647,8 @@ def main() -> None:
 
     if not args.no_best and args.format == "text":
         print_best_by_root(frame, args.sort_by)
+    if not args.no_folder_rankings and args.format == "text":
+        print_result_folder_rankings(display, args.sort_by)
 
 
 if __name__ == "__main__":
