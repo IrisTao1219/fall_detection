@@ -62,6 +62,21 @@ bash src/run_all.sh --keypoints blazepose-normalized
 bash src/run_all.sh --keypoints ur-blazepose,le2i-blazepose --combine-datasets
 ```
 
+要让全部模型在同一份 BlazePose XYC 联合缓存上重跑，并让 ST-GCN 使用 spatial 图：
+
+```bash
+bash src/run_all.sh \
+  --keypoints ur-blazepose,le2i-blazepose \
+  --combine-datasets \
+  --feature-mode xyc \
+  --variant xyc \
+  --stgcn-architecture baseline \
+  --stgcn-graph-partition spatial \
+  --device cuda:1
+```
+
+`--variant xyc` 会把缓存和结果写入带 `_xyc` 后缀的新路径，避免覆盖 XY 基线。
+
 联合结果默认写入 `results/combined_ur_le2i_blazepose/{rf,mlp,lstm,stgcn}`，联合窗口缓存写入 `data/windows/combined_ur_le2i_blazepose_windows.npz`。合并模式默认按相同秒数生成窗口：窗口长度 1 秒、步长 0.2 秒；因此 UR-Fall 使用 30/6 帧，Le2i 使用 25/5 帧。合并缓存时会把不同 FPS 得到的窗口沿时间轴线性重采样到统一帧数，便于模型一起训练。合并时会给每个 `video_id` 加数据集前缀，例如 `ur::fall-01-cam0-rgb`，防止不同数据集视频名碰撞；交叉验证仍按前缀后的原始视频分组，避免同一视频的窗口跨训练折和测试折。RF、MLP、LSTM、ST-GCN 和 Transformer 的最终汇总指标均按窗口级预测计算。
 
 如果只写逗号分隔、但不加 `--combine-datasets`，则表示连续跑多个数据集，结果仍分开保存。

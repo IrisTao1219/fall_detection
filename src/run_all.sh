@@ -25,7 +25,11 @@ STRIDE_SECONDS="0.2"
 NEST_OUTPUT_BY_MODEL="0"
 KEYPOINT_ADAPTER="blazepose"
 FEATURE_MODE="xy66"
+FEATURE_MODE_OVERRIDE=""
 VISIBILITY_THRESHOLD="0.3"
+VARIANT=""
+STGCN_ARCHITECTURE="baseline"
+STGCN_GRAPH_PARTITION="uniform"
 DATA_ROOT_OVERRIDE=""
 OUTPUT_ROOT_OVERRIDE=""
 WINDOWS_CACHE_OVERRIDE=""
@@ -50,6 +54,11 @@ Options:
   --stride N              Window stride passed to prepare_windows.py
   --window-seconds S      Window length in seconds for combined dataset preparation
   --stride-seconds S      Window stride in seconds for combined dataset preparation
+  --feature-mode MODE     Override prepared features: xy, xy66, or xyc
+  --variant NAME          Add a suffix to cache/result paths, e.g. xyc
+  --stgcn-architecture A  ST-GCN architecture: baseline, lite, coco17-lite
+  --stgcn-graph-partition P
+                          ST-GCN graph: uniform or spatial
   --combine-datasets      Combine multiple --keypoints profiles into one training/evaluation cache
   --nested-output         Pass results root as OUTPUT_ROOT/model for each experiment
   -h, --help              Show this help
@@ -59,6 +68,7 @@ Current default:
 
 Examples:
   bash src/run_all.sh --keypoints ur-blazepose,le2i-blazepose --combine-datasets
+  bash src/run_all.sh --keypoints ur-blazepose,le2i-blazepose --combine-datasets --feature-mode xyc --variant xyc --stgcn-graph-partition spatial
   bash src/run_all.sh --keypoints ur-vitpose,le2i-vitpose --combine-datasets
   bash src/run_all.sh --keypoints ur --device cuda:0
 EOF
@@ -257,6 +267,38 @@ while [[ $# -gt 0 ]]; do
       STRIDE_SECONDS_OVERRIDE="${1#*=}"
       shift
       ;;
+    --feature-mode)
+      FEATURE_MODE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --feature-mode=*)
+      FEATURE_MODE_OVERRIDE="${1#*=}"
+      shift
+      ;;
+    --variant)
+      VARIANT="$2"
+      shift 2
+      ;;
+    --variant=*)
+      VARIANT="${1#*=}"
+      shift
+      ;;
+    --stgcn-architecture)
+      STGCN_ARCHITECTURE="$2"
+      shift 2
+      ;;
+    --stgcn-architecture=*)
+      STGCN_ARCHITECTURE="${1#*=}"
+      shift
+      ;;
+    --stgcn-graph-partition)
+      STGCN_GRAPH_PARTITION="$2"
+      shift 2
+      ;;
+    --stgcn-graph-partition=*)
+      STGCN_GRAPH_PARTITION="${1#*=}"
+      shift
+      ;;
     --nested-output)
       NEST_OUTPUT_BY_MODEL_OVERRIDE="1"
       shift
@@ -276,6 +318,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$FEATURE_MODE_OVERRIDE" in
+  ""|xy|xy66|xy_flat|xyc|xyc_flat) ;;
+  *) echo "Unsupported --feature-mode: $FEATURE_MODE_OVERRIDE" >&2; exit 1 ;;
+esac
+case "$STGCN_ARCHITECTURE" in
+  baseline|lite|coco17-lite) ;;
+  *) echo "Unsupported --stgcn-architecture: $STGCN_ARCHITECTURE" >&2; exit 1 ;;
+esac
+case "$STGCN_GRAPH_PARTITION" in
+  uniform|spatial) ;;
+  *) echo "Unsupported --stgcn-graph-partition: $STGCN_GRAPH_PARTITION" >&2; exit 1 ;;
+esac
+if [[ -n "$VARIANT" && ! "$VARIANT" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "--variant may contain only letters, digits, underscore, and hyphen." >&2
+  exit 1
+fi
 
 if [[ "${#KEYPOINTS_PROFILES[@]}" -gt 1 ]]; then
   if [[ -n "$DATA_ROOT_OVERRIDE" || -n "$OUTPUT_ROOT_OVERRIDE" || -n "$WINDOWS_CACHE_OVERRIDE" ]]; then
@@ -314,6 +373,15 @@ run_profile() {
   fi
   if [[ -n "$NEST_OUTPUT_BY_MODEL_OVERRIDE" ]]; then
     NEST_OUTPUT_BY_MODEL="$NEST_OUTPUT_BY_MODEL_OVERRIDE"
+  fi
+  if [[ -n "$FEATURE_MODE_OVERRIDE" ]]; then
+    FEATURE_MODE="$FEATURE_MODE_OVERRIDE"
+  fi
+  if [[ -n "$VARIANT" ]]; then
+    local variant_slug
+    variant_slug="${VARIANT//-/_}"
+    OUTPUT_ROOT="${OUTPUT_ROOT}_${variant_slug}"
+    WINDOWS_CACHE="${WINDOWS_CACHE%.npz}_${variant_slug}.npz"
   fi
 
   echo "========================================"
@@ -356,6 +424,25 @@ run_profile() {
         --output-root "$EXP_OUTPUT_ROOT" \
         --window-size "$WINDOW_SIZE" \
         --stride "$STRIDE"
+    elif [[ "$EXP" == "stgcn" ]]; then
+      uv run python "src/experiments/${EXP}.py" \
+        --data-root "$DATA_ROOT" \
+        --windows-cache "$WINDOWS_CACHE" \
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$WINDOW_SIZE" \
+        --stride "$STRIDE" \
+        --architecture "$STGCN_ARCHITECTURE" \
+        --graph-partition "$STGCN_GRAPH_PARTITION" \
+        --device "$DEVICE"
+    elif [[ "$EXP" == "transformer" ]]; then
+      uv run python "src/experiments/${EXP}.py" \
+        --data-root "$DATA_ROOT" \
+        --windows-cache "$WINDOWS_CACHE" \
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$WINDOW_SIZE" \
+        --stride "$STRIDE" \
+        --feature-mode "$(transformer_feature_mode "$FEATURE_MODE")" \
+        --device "$DEVICE"
     else
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$DATA_ROOT" \
@@ -376,6 +463,13 @@ profile_slug() {
   text="${text//,/_}"
   text="${text//-/_}"
   echo "$text"
+}
+
+transformer_feature_mode() {
+  case "$1" in
+    xyc|xyc_flat) echo "xyc" ;;
+    *) echo "xy" ;;
+  esac
 }
 
 run_experiments_once() {
@@ -407,6 +501,25 @@ run_experiments_once() {
         --output-root "$EXP_OUTPUT_ROOT" \
         --window-size "$window_size" \
         --stride "$stride"
+    elif [[ "$EXP" == "stgcn" ]]; then
+      uv run python "src/experiments/${EXP}.py" \
+        --data-root "$data_root" \
+        --windows-cache "$windows_cache" \
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$window_size" \
+        --stride "$stride" \
+        --architecture "$STGCN_ARCHITECTURE" \
+        --graph-partition "$STGCN_GRAPH_PARTITION" \
+        --device "$DEVICE"
+    elif [[ "$EXP" == "transformer" ]]; then
+      uv run python "src/experiments/${EXP}.py" \
+        --data-root "$data_root" \
+        --windows-cache "$windows_cache" \
+        --output-root "$EXP_OUTPUT_ROOT" \
+        --window-size "$window_size" \
+        --stride "$stride" \
+        --feature-mode "$(transformer_feature_mode "$FEATURE_MODE")" \
+        --device "$DEVICE"
     else
       uv run python "src/experiments/${EXP}.py" \
         --data-root "$data_root" \
@@ -432,6 +545,9 @@ run_combined_profiles() {
   joined_profiles="$(IFS=,; echo "${KEYPOINTS_PROFILES[*]}")"
   local slug
   slug="$(profile_slug "$joined_profiles")"
+  if [[ -n "$VARIANT" ]]; then
+    slug="${slug}_$(profile_slug "$VARIANT")"
+  fi
   local common_window_seconds="${WINDOW_SECONDS_OVERRIDE:-$WINDOW_SECONDS}"
   local common_stride_seconds="${STRIDE_SECONDS_OVERRIDE:-$STRIDE_SECONDS}"
   local combined_cache="data/windows/combined_${slug}_windows.npz"
@@ -452,6 +568,9 @@ run_combined_profiles() {
 
   for PROFILE in "${KEYPOINTS_PROFILES[@]}"; do
     apply_keypoints_profile "$PROFILE"
+    if [[ -n "$FEATURE_MODE_OVERRIDE" ]]; then
+      FEATURE_MODE="$FEATURE_MODE_OVERRIDE"
+    fi
     WINDOW_SIZE="$(python3 -c "print(max(1, round(float('$common_window_seconds') * float('$FPS'))))")"
     STRIDE="$(python3 -c "print(max(1, round(float('$common_stride_seconds') * float('$FPS'))))")"
     if [[ -n "$WINDOW_SIZE_OVERRIDE" ]]; then
