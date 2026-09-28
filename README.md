@@ -89,6 +89,33 @@ bash src/run_all.sh --keypoints le2i-blazepose --window-size 25 --stride 5
 
 `run_all.sh` 会先调用 `src/prepare_windows.py` 生成共享窗口缓存。窗口脚本会根据 keypoints NPZ 自动选择标签来源：NPZ 中存在 `frame_labels` 时使用逐帧标签；否则按 UR-Fall keypoints 读取官方 `data/urfall-cam0-falls.csv`。当前默认窗口统一为 1 秒、步长统一为 0.2 秒：UR-Fall 为 30 帧窗口/6 帧步长，Le2i 为 25 帧窗口/5 帧步长。
 
+### ViTPose confidence + COCO-17 ST-GCN
+
+默认 `xy` 缓存和原始 10-block/uniform ST-GCN 保持不变。要启用可切换的 ViTPose 优化版，先生成每个关节按 `[x,y,confidence]` 排列的独立缓存：
+
+```bash
+uv run python src/prepare_windows.py \
+  --data-root data/keypoints_ur_vitpose \
+  --output data/windows/keypoints_ur_vitpose_xyc_windows.npz \
+  --window-size 30 --stride 6 \
+  --keypoint-adapter vitpose --feature-mode xyc
+```
+
+再运行 COCO-17 五层轻量网络和 self/inward/outward 三分区图：
+
+```bash
+uv run python src/experiments/stgcn.py \
+  --data-root data/keypoints_ur_vitpose \
+  --windows-cache data/windows/keypoints_ur_vitpose_xyc_windows.npz \
+  --output-root results/ur_vitpose \
+  --run-name stgcn_xyc_coco17_lite \
+  --architecture coco17-lite \
+  --graph-partition spatial \
+  --window-size 30 --stride 6 --device cuda:1
+```
+
+消融实验可分别切回 `--feature-mode xy`、`--architecture baseline` 或 `--graph-partition uniform`。请使用不同的缓存文件和 `--run-name`，避免覆盖旧基线。
+
 ### 1. 提取姿态关键点
 
 ```bash

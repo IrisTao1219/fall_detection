@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ten-block ST-GCN fall-detection experiment using BlazePose windows.
+"""Configurable ST-GCN fall-detection experiment for BlazePose or ViTPose.
 
 Run from the fall_detection directory with
 ``uv run python src/experiment_stgcn.py --data-root data/keypoints_normalized``.
@@ -85,7 +85,9 @@ COCO17_EDGES = (
     (5, 11), (6, 12), (11, 12),
     (11, 13), (13, 15), (12, 14), (14, 16),
 )
+COCO17_SPATIAL_EDGES = COCO17_EDGES + ((0, 5), (0, 6))
 STGCN_CHANNELS = (64,) * 4 + (128,) * 3 + (256,) * 3
+COCO17_LITE_CHANNELS = (64, 64, 128, 128, 256)
 TEMPORAL_KERNEL_SIZE = 9
 
 
@@ -484,20 +486,73 @@ def skeleton_edges(joint_count: int):
     raise ValueError(f"ST-GCN only supports 33-joint BlazePose or 17-joint COCO/VitPose, got {joint_count}")
 
 
-def make_adjacency(joint_count: int) -> torch.Tensor:
-    edges, _ = skeleton_edges(joint_count)
-    adjacency = np.eye(joint_count, dtype=np.float32)
-    for a, b in edges:
-        adjacency[a, b] = adjacency[b, a] = 1.0
+def _normalize_adjacency(adjacency: np.ndarray) -> np.ndarray:
     degree = adjacency.sum(axis=1)
-    adjacency /= np.sqrt(degree[:, None] * degree[None, :])
-    return torch.from_numpy(adjacency)
+    degree[degree < 1e-6] = 1.0
+    return adjacency / degree[:, None]
+
+
+def _distances_from_root(joint_count: int, edges, root: int) -> List[int]:
+    neighbors = [[] for _ in range(joint_count)]
+    for a, b in edges:
+        neighbors[a].append(b)
+        neighbors[b].append(a)
+    distances = [joint_count + 1] * joint_count
+    distances[root] = 0
+    queue = [root]
+    for node in queue:
+        for neighbor in neighbors[node]:
+            if distances[neighbor] > distances[node] + 1:
+                distances[neighbor] = distances[node] + 1
+                queue.append(neighbor)
+    return distances
+
+
+def make_adjacency(joint_count: int, graph_partition: str = "uniform") -> torch.Tensor:
+    edges, _ = skeleton_edges(joint_count)
+    if graph_partition == "uniform":
+        adjacency = np.eye(joint_count, dtype=np.float32)
+        for a, b in edges:
+            adjacency[a, b] = adjacency[b, a] = 1.0
+        degree = adjacency.sum(axis=1)
+        adjacency /= np.sqrt(degree[:, None] * degree[None, :])
+        return torch.from_numpy(adjacency[None, ...])
+    if graph_partition != "spatial":
+        raise ValueError(f"Unknown graph_partition={graph_partition!r}")
+
+    # Connect the COCO face subgraph to the torso only in the opt-in spatial
+    # graph. The legacy uniform graph remains byte-for-byte compatible.
+    if joint_count == 17:
+        edges = COCO17_SPATIAL_EDGES
+
+    # COCO-17 has no explicit spine/hip-center joint. Left hip (11) is used
+    # only to orient edges into root/centripetal/centrifugal partitions.
+    root = 11 if joint_count == 17 else 23
+    distance = _distances_from_root(joint_count, edges, root)
+    self_links = np.eye(joint_count, dtype=np.float32)
+    inward = np.zeros((joint_count, joint_count), dtype=np.float32)
+    outward = np.zeros((joint_count, joint_count), dtype=np.float32)
+    for a, b in edges:
+        if distance[a] <= distance[b]:
+            parent, child = a, b
+        else:
+            parent, child = b, a
+        inward[child, parent] = 1.0
+        outward[parent, child] = 1.0
+    partitions = np.stack(
+        [self_links, _normalize_adjacency(inward), _normalize_adjacency(outward)]
+    )
+    return torch.from_numpy(partitions.astype(np.float32))
 
 
 class STGCNBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, dropout: float):
+    def __init__(self, in_channels: int, out_channels: int, stride: int, dropout: float, partitions: int):
         super().__init__()
-        self.spatial = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.partitions = partitions
+        self.out_channels = out_channels
+        self.spatial = nn.Conv2d(
+            in_channels, out_channels * partitions, kernel_size=1
+        )
         self.temporal = nn.Conv2d(
             out_channels, out_channels, kernel_size=(TEMPORAL_KERNEL_SIZE, 1),
             stride=(stride, 1), padding=(TEMPORAL_KERNEL_SIZE // 2, 0),
@@ -514,29 +569,40 @@ class STGCNBlock(nn.Module):
         self.activation = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor, adjacency: torch.Tensor) -> torch.Tensor:
-        spatial = torch.einsum("bctv,vw->bctw", x, adjacency)
-        features = self.dropout(self.norm(self.temporal(self.spatial(spatial))))
+        spatial = self.spatial(x).reshape(
+            x.shape[0], self.partitions, self.out_channels, x.shape[2], x.shape[3]
+        )
+        spatial = torch.einsum("bkctv,kvw->bctw", spatial, adjacency)
+        features = self.dropout(self.norm(self.temporal(spatial)))
         return self.activation(features + self.residual(x))
 
 
 class STGCN(nn.Module):
-    def __init__(self, joint_count: int, dropout: float = 0.3):
+    def __init__(self, joint_count: int, input_channels: int = 2, dropout: float = 0.3,
+                 channels: Sequence[int] = STGCN_CHANNELS,
+                 graph_partition: str = "uniform"):
         super().__init__()
         self.joint_count = joint_count
-        self.register_buffer("adjacency", make_adjacency(joint_count))
+        self.input_channels = input_channels
+        self.register_buffer("adjacency", make_adjacency(joint_count, graph_partition))
         blocks = []
-        in_channels = 2
-        for layer, out_channels in enumerate(STGCN_CHANNELS):
-            # Reduce temporal resolution when entering a wider channel stage.
-            stride = 2 if layer in (4, 7) else 1
-            blocks.append(STGCNBlock(in_channels, out_channels, stride, dropout))
+        in_channels = input_channels
+        previous_channels = None
+        for out_channels in channels:
+            stride = 2 if previous_channels is not None and out_channels > previous_channels else 1
+            blocks.append(STGCNBlock(
+                in_channels, out_channels, stride, dropout, self.adjacency.shape[0]
+            ))
             in_channels = out_channels
+            previous_channels = out_channels
         self.blocks = nn.ModuleList(blocks)
-        self.classifier = nn.Linear(STGCN_CHANNELS[-1], 2)
+        self.classifier = nn.Linear(channels[-1], 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Loader supplies [B,T,V*2]; graph layers use [B,C,T,V].
-        x = x.reshape(x.shape[0], x.shape[1], self.joint_count, 2).permute(0, 3, 1, 2)
+        # Loader supplies joint-major [B,T,V*C]; graph layers use [B,C,T,V].
+        x = x.reshape(
+            x.shape[0], x.shape[1], self.joint_count, self.input_channels
+        ).permute(0, 3, 1, 2)
         for block in self.blocks:
             x = block(x, self.adjacency)
         # Keep logits for CrossEntropyLoss. Prediction uses Softmax in probabilities().
@@ -551,13 +617,16 @@ def standardize(x: np.ndarray, fit_idx: np.ndarray):
     return mean.astype(np.float32), std.astype(np.float32)
 
 
-def train_fold(x, y, groups, args, device, seed, joint_count: int):
+def train_fold(x, y, groups, args, device, seed, joint_count: int,
+               input_channels: int, channels: Sequence[int], graph_partition: str):
     fit_idx, val_idx = inner_group_split_window_labels(y, groups, seed)
     mean, std = standardize(x, fit_idx)
     fit_loader = make_loader(((x[fit_idx] - mean) / std).astype(np.float32), y[fit_idx], args.batch_size, True)
     val_loader = make_loader(((x[val_idx] - mean) / std).astype(np.float32), y[val_idx], args.batch_size, False)
     seed_everything(seed)
-    model = STGCN(joint_count, args.dropout).to(device)
+    model = STGCN(
+        joint_count, input_channels, args.dropout, channels, graph_partition
+    ).to(device)
     counts = np.bincount(y[fit_idx], minlength=2)
     weights = torch.tensor(len(fit_idx) / (2 * counts), dtype=torch.float32, device=device)
     criterion = nn.CrossEntropyLoss(weight=weights)
@@ -608,11 +677,23 @@ def parse_args():
     parser.add_argument("--data-root", type=Path, default=Path("data/keypoints"))
     parser.add_argument("--windows-cache", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--run-name", default=None,
+        help="Optional result directory name; defaults to the legacy stgcn name.",
+    )
     parser.add_argument("--window-size", type=int, default=30)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--missing-mode", choices=("zero", "interp"), default="interp")
     parser.add_argument("--visibility-threshold", type=float, default=0.3)
     parser.add_argument("--dropout", type=float, default=0.3)
+    parser.add_argument(
+        "--architecture", choices=("baseline", "coco17-lite"), default="baseline",
+        help="baseline keeps the original 10-block model; coco17-lite uses five blocks.",
+    )
+    parser.add_argument(
+        "--graph-partition", choices=("uniform", "spatial"), default="uniform",
+        help="uniform keeps the original graph; spatial uses self/inward/outward partitions.",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -638,7 +719,7 @@ def main():
         raise ValueError("dropout must be in [0, 1)")
 
     # Match sequence baseline output layout: one dataset root -> one experiment directory.
-    run_name = dataset_run_name(args.data_root)
+    run_name = args.run_name or dataset_run_name(args.data_root)
     args.experiment_output_dir = args.output_root / run_name
     output = args.experiment_output_dir
     output.mkdir(parents=True, exist_ok=True)
@@ -651,22 +732,34 @@ def main():
     print(f"Output dir: {output}")
     print(
         f"Window={args.window_size}, stride={args.stride}, "
-        f"feature_mode=xy66, missing_mode={args.missing_mode}"
+        f"feature_mode=cache, missing_mode={args.missing_mode}"
     )
 
     x, y, groups, records, cache_config = experiment_common.load_windows_cache(
         args.windows_cache
     )
     joint_count = int(cache_config.get("joint_count", x.shape[-1] // 2))
-    if x.shape[-1] != joint_count * 2:
+    if x.shape[-1] % joint_count != 0:
         raise ValueError(
-            f"ST-GCN expects XY features with D=joint_count*2, got D={x.shape[-1]} "
+            f"ST-GCN expects joint-major features, got D={x.shape[-1]} "
             f"and joint_count={joint_count}"
         )
+    input_channels = x.shape[-1] // joint_count
+    if input_channels not in (2, 3):
+        raise ValueError(
+            f"ST-GCN supports XY or XYC input, got {input_channels} channels per joint"
+        )
+    if args.architecture == "coco17-lite" and joint_count != 17:
+        raise ValueError("--architecture coco17-lite requires COCO/ViTPose 17 joints")
+    channels = (
+        COCO17_LITE_CHANNELS
+        if args.architecture == "coco17-lite"
+        else STGCN_CHANNELS
+    )
     _, graph_description = skeleton_edges(joint_count)
     pose_extractor = "ViTPose" if joint_count == 17 else "BlazePose"
     feature_mode = str(cache_config.get("feature_mode", f"xy{joint_count * 2}"))
-    x = x.reshape(x.shape[0], x.shape[1], joint_count, 2)
+    x = x.reshape(x.shape[0], x.shape[1], joint_count, input_channels)
 
     # 一个 fall 视频现在可以同时含 normal/fall 窗口，所以不能再用窗口 y 的 mode
     # 判断“这个视频属于哪一类”。这里按视频名本身的 fall/adl 类型统计。
@@ -699,8 +792,11 @@ def main():
         {
             "model_type": "stgcn",
             "feature_mode": feature_mode,
-            "channels": list(STGCN_CHANNELS),
+            "input_channels": input_channels,
+            "channels": list(channels),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+            "architecture": args.architecture,
+            "graph_partition": args.graph_partition,
             "pose_extractor": pose_extractor,
             "joint_count": joint_count,
             "graph": graph_description,
@@ -728,13 +824,15 @@ def main():
     metrics_header = [
         f"data_root: {args.data_root}",
         f"feature_mode: {feature_mode}",
-        f"input_shape_per_window: [{args.window_size}, {joint_count}, 2]",
+        f"input_shape_per_window: [{args.window_size}, {joint_count}, {input_channels}]",
         f"graph: {graph_description}",
         f"window_size: {args.window_size}",
         f"stride: {args.stride}",
         f"missing_mode: {args.missing_mode}",
         f"visibility_threshold: {args.visibility_threshold}",
-        f"channels: {STGCN_CHANNELS}",
+        f"architecture: {args.architecture}",
+        f"graph_partition: {args.graph_partition}",
+        f"channels: {channels}",
         f"temporal_kernel_size: {TEMPORAL_KERNEL_SIZE}",
         f"dropout: {args.dropout}",
         f"epochs: {args.epochs}",
@@ -775,6 +873,9 @@ def main():
             device,
             args.seed + fold,
             joint_count,
+            input_channels,
+            channels,
+            args.graph_partition,
         )
 
         test_x = ((x[test_idx] - mean) / std).astype(np.float32)
@@ -811,8 +912,11 @@ def main():
             "model_type": "stgcn",
             "input_dim": x.shape[-1],
             "dropout": args.dropout,
-            "channels": STGCN_CHANNELS,
+            "input_channels": input_channels,
+            "channels": tuple(channels),
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
+            "architecture": args.architecture,
+            "graph_partition": args.graph_partition,
             "state_dict": model.state_dict(),
             "feature_mean": mean,
             "feature_std": std,

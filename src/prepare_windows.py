@@ -122,6 +122,8 @@ def parse_args() -> argparse.Namespace:
             "xy",
             "xy66",
             "xy_flat",
+            "xyc",
+            "xyc_flat",
             "joints",
             "joints16",
         ),

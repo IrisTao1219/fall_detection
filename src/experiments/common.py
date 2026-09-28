@@ -388,7 +388,7 @@ def adapt_keypoints_from_npz(
     visibility_threshold: float = 0.3,
     missing_mode: str = "mask",
     confidence_index: Optional[int] = None,
-) -> Tuple[np.ndarray, Optional[np.ndarray], int, str]:
+) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray, int, str]:
     """读取一个 NPZ 的关键点字段，并按指定姿态估计器转换为 [T,J,2]。
 
 
@@ -414,6 +414,32 @@ def adapt_keypoints_from_npz(
         else spec.default_confidence_index
     )
     expected_joints = spec.expected_joints if spec.name != "auto" else None
+    raw_keypoints = np.asarray(data["keypoints"])
+    confidence: Optional[np.ndarray] = scores
+    if confidence is None and selected_confidence_index is not None:
+        channels = raw_keypoints.shape[2]
+        index = (
+            selected_confidence_index
+            if selected_confidence_index >= 0
+            else channels + selected_confidence_index
+        )
+        if index < 0 or index >= channels:
+            raise ValueError(
+                f"confidence_index={selected_confidence_index} 超出 C={channels}"
+            )
+        confidence = raw_keypoints[..., index]
+    if confidence is None:
+        # Models using XYC can still consume keypoint formats without an
+        # explicit score. A finite coordinate is treated as fully confident.
+        confidence = np.isfinite(raw_keypoints[..., :2]).all(axis=-1).astype(np.float32)
+    confidence = np.asarray(confidence, dtype=np.float32)
+    if confidence.shape != raw_keypoints.shape[:2]:
+        raise ValueError(
+            f"confidence 形状应为 {raw_keypoints.shape[:2]}，实际为 {confidence.shape}"
+        )
+    confidence = np.nan_to_num(confidence, nan=0.0, posinf=0.0, neginf=0.0)
+    confidence = np.clip(confidence, 0.0, 1.0)
+
     xy = preprocess_keypoints(
         keypoints=keypoints,
         valid_mask=valid_mask,
@@ -428,7 +454,23 @@ def adapt_keypoints_from_npz(
         frame_count=int(xy.shape[0]),
         joint_count=int(xy.shape[1]),
     )
-    return xy, frame_valid_mask, int(xy.shape[1]), spec.name
+    # Keep confidence zero for rejected/missing joints. This lets sequence and
+    # graph models distinguish observed coordinates from interpolated ones.
+    confidence = np.where(
+        np.isfinite(raw_keypoints[..., :2]).all(axis=-1)
+        & (confidence >= visibility_threshold),
+        confidence,
+        0.0,
+    ).astype(np.float32)
+    if valid_mask is not None:
+        supplied_valid = np.asarray(valid_mask).astype(bool)
+        if supplied_valid.shape == confidence.shape:
+            confidence = np.where(supplied_valid, confidence, 0.0)
+        elif supplied_valid.reshape(-1).size == confidence.shape[0]:
+            confidence = np.where(
+                supplied_valid.reshape(-1, 1), confidence, 0.0
+            )
+    return xy, frame_valid_mask, confidence, int(xy.shape[1]), spec.name
 
 
 def fill_missing_temporally(
@@ -454,12 +496,23 @@ def build_frame_features(
     xy: np.ndarray,
     feature_mode: str,
     joint_indices: Optional[Sequence[int]] = None,
+    confidence: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """从 [T,J,2] 的 x/y 关键点构建逐帧模型特征。"""
     if xy.ndim != 3 or xy.shape[2] != 2:
         raise ValueError(f"期望 xy 形状为 [T,J,2]，实际为 {xy.shape}")
     if feature_mode in ("xy", "xy66", "xy_flat"):
         return xy.reshape(xy.shape[0], -1).astype(np.float32)
+    if feature_mode in ("xyc", "xyc_flat"):
+        if confidence is None:
+            raise ValueError(f"{feature_mode} 需要逐关节 confidence")
+        confidence = np.asarray(confidence, dtype=np.float32)
+        if confidence.shape != xy.shape[:2]:
+            raise ValueError(
+                f"confidence 形状应为 {xy.shape[:2]}，实际为 {confidence.shape}"
+            )
+        xyc = np.concatenate([xy, confidence[..., None]], axis=-1)
+        return xyc.reshape(xyc.shape[0], -1).astype(np.float32)
     if feature_mode in ("joints", "joints16"):
         if joint_indices is None:
             raise ValueError(f"{feature_mode} 需要 --joint-indices")
@@ -525,7 +578,7 @@ def load_sequence_windows(
                 video_id = str(raw_video_id)
             else:
                 video_id = path.stem
-            xy, valid_mask, joint_count, resolved_adapter = adapt_keypoints_from_npz(
+            xy, valid_mask, confidence, joint_count, resolved_adapter = adapt_keypoints_from_npz(
                 data,
                 adapter=keypoint_adapter,
                 visibility_threshold=visibility_threshold,
@@ -546,6 +599,7 @@ def load_sequence_windows(
             xy=xy,
             feature_mode=feature_mode,
             joint_indices=joint_indices,
+            confidence=confidence,
         )
         if frame_labels is not None:
             current_label_source = "frame_labels"
@@ -626,8 +680,8 @@ def load_sequence_windows(
         f"short_videos_skipped={skipped_short} | "
         f"no_valid_windows_skipped={skipped_no_valid_windows}"
     )
-    if feature_mode in ("xy", "xy66", "xy_flat"):
-        output_joint_count = int(x.shape[-1] // 2)
+    if feature_mode in ("xy", "xy66", "xy_flat", "xyc", "xyc_flat"):
+        output_joint_count = int(joint_count)
     elif joint_indices is not None:
         output_joint_count = len(joint_indices)
     else:
