@@ -694,6 +694,20 @@ def parse_args():
         "--graph-partition", choices=("uniform", "spatial"), default="uniform",
         help="uniform keeps the original graph; spatial uses self/inward/outward partitions.",
     )
+    parser.add_argument(
+        "--threshold-objective",
+        choices=("fixed", "accuracy", "precision", "recall", "f1"),
+        default="fixed",
+        help="Tune the decision threshold on the inner validation split, or keep it fixed.",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.5,
+        help="Decision threshold used when --threshold-objective=fixed.",
+    )
+    parser.add_argument(
+        "--min-recall", type=float, default=0.0,
+        help="Minimum validation recall required during threshold tuning.",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -717,6 +731,10 @@ def main():
         raise ValueError("Window size, stride, patience, epochs, batch size must be positive; folds >= 2")
     if not 0 <= args.dropout < 1:
         raise ValueError("dropout must be in [0, 1)")
+    if not 0 <= args.threshold <= 1:
+        raise ValueError("threshold must be in [0, 1]")
+    if not 0 <= args.min_recall <= 1:
+        raise ValueError("min_recall must be in [0, 1]")
 
     # Match sequence baseline output layout: one dataset root -> one experiment directory.
     run_name = args.run_name or dataset_run_name(args.data_root)
@@ -759,6 +777,11 @@ def main():
     _, graph_description = skeleton_edges(joint_count)
     pose_extractor = "ViTPose" if joint_count == 17 else "BlazePose"
     feature_mode = str(cache_config.get("feature_mode", f"xy{joint_count * 2}"))
+    cached_window_size = int(
+        cache_config.get("target_window_frames", cache_config.get("window_size", x.shape[1]))
+    )
+    cached_stride = cache_config.get("stride", args.stride)
+    cached_label_rule = str(cache_config.get("label_rule", "unknown"))
     x = x.reshape(x.shape[0], x.shape[1], joint_count, input_channels)
 
     # 一个 fall 视频现在可以同时含 normal/fall 窗口，所以不能再用窗口 y 的 mode
@@ -797,12 +820,18 @@ def main():
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
             "architecture": args.architecture,
             "graph_partition": args.graph_partition,
+            "threshold_objective": args.threshold_objective,
+            "threshold": args.threshold,
+            "min_recall": args.min_recall,
             "pose_extractor": pose_extractor,
             "joint_count": joint_count,
             "graph": graph_description,
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
-            "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
+            "cache_window_size": cached_window_size,
+            "cache_stride": cached_stride,
+            "cache_label_rule": cached_label_rule,
+            "urfall_window_label_rule": cached_label_rule,
         }
     )
     (output / "config.json").write_text(
@@ -824,14 +853,17 @@ def main():
     metrics_header = [
         f"data_root: {args.data_root}",
         f"feature_mode: {feature_mode}",
-        f"input_shape_per_window: [{args.window_size}, {joint_count}, {input_channels}]",
+        f"input_shape_per_window: [{cached_window_size}, {joint_count}, {input_channels}]",
         f"graph: {graph_description}",
-        f"window_size: {args.window_size}",
-        f"stride: {args.stride}",
+        f"window_size: {cached_window_size}",
+        f"stride: {cached_stride}",
         f"missing_mode: {args.missing_mode}",
         f"visibility_threshold: {args.visibility_threshold}",
         f"architecture: {args.architecture}",
         f"graph_partition: {args.graph_partition}",
+        f"threshold_objective: {args.threshold_objective}",
+        f"fixed_threshold: {args.threshold}",
+        f"min_recall: {args.min_recall}",
         f"channels: {channels}",
         f"temporal_kernel_size: {TEMPORAL_KERNEL_SIZE}",
         f"dropout: {args.dropout}",
@@ -845,7 +877,7 @@ def main():
         f"device: {device}",
         f"annotation_csv: {FALL_ANNOTATION_CSV}",
         "label_level: window",
-        "window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)",
+        f"window_label_rule: {cached_label_rule}",
     ]
 
     for fold, (train_idx, test_idx) in enumerate(splitter.split(x, split_y, groups), 1):
@@ -865,7 +897,7 @@ def main():
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
-        model, mean, std, best_epoch, val_f1, history, _, seconds = train_fold(
+        model, mean, std, best_epoch, val_f1, history, inner_indices, seconds = train_fold(
             x[train_idx],
             y[train_idx],
             groups[train_idx],
@@ -878,14 +910,40 @@ def main():
             args.graph_partition,
         )
 
+        _, val_idx = inner_indices
+        val_x = ((x[train_idx][val_idx] - mean) / std).astype(np.float32)
+        val_y = y[train_idx][val_idx]
+        val_prob = probabilities(
+            model,
+            make_loader(val_x, val_y, args.batch_size, False),
+            device,
+        )
+        if args.threshold_objective == "fixed":
+            threshold = args.threshold
+            threshold_metrics = compute_metrics(
+                val_y, (val_prob >= threshold).astype(np.int64), val_prob
+            )
+        else:
+            threshold, threshold_metrics = experiment_common.tune_threshold(
+                val_y,
+                val_prob,
+                objective=args.threshold_objective,
+                min_recall=args.min_recall,
+            )
+
         test_x = ((x[test_idx] - mean) / std).astype(np.float32)
         prob = probabilities(
             model,
             make_loader(test_x, y[test_idx], args.batch_size, False),
             device,
         )
-        pred = (prob >= 0.5).astype(np.int64)
+        pred = (prob >= threshold).astype(np.int64)
         fold_metrics = compute_metrics(y[test_idx], pred, prob)
+        fold_metrics["threshold"] = threshold
+        fold_metrics["threshold_val_f1"] = threshold_metrics["f1"]
+        fold_metrics["threshold_val_recall"] = threshold_metrics["recall"]
+        fold_metrics["best_epoch"] = best_epoch
+        fold_metrics["val_f1_at_0.5"] = val_f1
 
         # Keep the same core fold_metrics.csv columns as sequence baseline.
         row = dict(fold_metrics)
@@ -902,7 +960,8 @@ def main():
             f"Precision={fold_metrics['precision']:.4f} | "
             f"Recall={fold_metrics['recall']:.4f} | "
             f"F1={fold_metrics['f1']:.4f} | "
-            f"ROC-AUC={fmt_metric(fold_metrics['roc_auc'])}"
+            f"ROC-AUC={fmt_metric(fold_metrics['roc_auc'])} | "
+            f"Threshold={threshold:.4f}"
         )
         print(
             f"    TN={fold_metrics['tn']} FP={fold_metrics['fp']} "
@@ -917,6 +976,10 @@ def main():
             "temporal_kernel_size": TEMPORAL_KERNEL_SIZE,
             "architecture": args.architecture,
             "graph_partition": args.graph_partition,
+            "threshold": threshold,
+            "threshold_objective": args.threshold_objective,
+            "min_recall": args.min_recall,
+            "threshold_validation_metrics": threshold_metrics,
             "state_dict": model.state_dict(),
             "feature_mean": mean,
             "feature_std": std,
@@ -931,8 +994,7 @@ def main():
             if isinstance(value, Path):
                 checkpoint["args"][key] = str(value)
         torch.save(checkpoint, models_dir / f"fold_{fold}.pt")
-        # Match sequence baseline history CSV structure: epoch + train_loss.
-        pd.DataFrame(history)[["epoch", "train_loss"]].to_csv(
+        pd.DataFrame(history).to_csv(
             histories_dir / f"fold_{fold}_history.csv", index=False
         )
 
