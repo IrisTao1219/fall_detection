@@ -1,7 +1,7 @@
 # Fall Detection 实验结果汇总
 
 - 排序指标：`f1`
-- 结果粒度：`all`
+- 结果粒度：`window`
 
 ## 全部结果
 
