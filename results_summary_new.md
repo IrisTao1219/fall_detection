@@ -12,9 +12,9 @@
 | 3 | results/ur_blazepose/transformer_keypoints_ur | window | 0.9797 | 0.9545 | 0.8235 | 0.8842 | 0.9727 | 42 | 2 | 9 | 488 | seed_metrics.csv |
 | 4 | results/ur_blazepose/transformer_keypoints_ur/seed_42 | window | 0.9797 | 0.9545 | 0.8235 | 0.8842 | 0.9727 | 42 | 2 | 9 | 488 | metrics.txt |
 | 5 | results/ur_blazepose/mlp | overall | 0.9704 | 0.7778 | 0.9608 | 0.8596 | 0.9818 | 49 | 14 | 2 | 476 | metrics.txt |
-| 6 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | seed_metrics.csv |
-| 7 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose/seed_42 | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | metrics.txt |
-| 8 | results/combined_ur_vitpose_le2i_vitpose/stgcn_xyc_coco17_lite_recall90 | overall | 0.9616 | 0.7752 | 0.8982 | 0.8322 | 0.9844 | 662 | 192 | 75 | 6017 | metrics.txt |
+| 6 | results/combined_ur_vitpose_le2i_vitpose/stgcn_xyc_coco17_10block_recall90 | overall | 0.9626 | 0.7884 | 0.8847 | 0.8338 | 0.9851 | 652 | 175 | 85 | 6034 | metrics.txt |
+| 7 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | seed_metrics.csv |
+| 8 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose/seed_42 | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | metrics.txt |
 | 9 | results/ur_blazepose/lstm | overall | 0.9649 | 0.7759 | 0.8824 | 0.8257 | 0.9469 | 45 | 13 | 6 | 477 | metrics.txt |
 | 10 | results/ur_vitpose/stgcn_xyc_coco17_lite | overall | 0.9554 | 0.7696 | 0.8698 | 0.8166 | 0.9796 | 167 | 50 | 25 | 1440 | metrics.txt |
 | 11 | results/combined_ur_vitpose_le2i_vitpose/lstm | overall | 0.9621 | 0.8591 | 0.7693 | 0.8117 | 0.9776 | 567 | 93 | 170 | 6116 | metrics.txt |
@@ -101,8 +101,8 @@
 
 | rank | result | scope | accuracy | precision | recall | f1 | roc_auc | tp | fp | fn | tn | source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | seed_metrics.csv |
-| 2 | results/combined_ur_vitpose_le2i_vitpose/stgcn_xyc_coco17_lite_recall90 | overall | 0.9616 | 0.7752 | 0.8982 | 0.8322 | 0.9844 | 662 | 192 | 75 | 6017 | metrics.txt |
+| 1 | results/combined_ur_vitpose_le2i_vitpose/stgcn_xyc_coco17_10block_recall90 | overall | 0.9626 | 0.7884 | 0.8847 | 0.8338 | 0.9851 | 652 | 175 | 85 | 6034 | metrics.txt |
+| 2 | results/combined_ur_vitpose_le2i_vitpose/transformer_combined_ur_vitpose_le2i_vitpose | window | 0.9652 | 0.8501 | 0.8155 | 0.8324 | 0.9665 | 601 | 106 | 136 | 6103 | seed_metrics.csv |
 | 3 | results/combined_ur_vitpose_le2i_vitpose/lstm | overall | 0.9621 | 0.8591 | 0.7693 | 0.8117 | 0.9776 | 567 | 93 | 170 | 6116 | metrics.txt |
 | 4 | results/combined_ur_vitpose_le2i_vitpose/rf | overall | 0.9433 | 0.6903 | 0.8440 | 0.7595 | 0.9754 |  |  |  |  | metrics.txt |
 | 5 | results/combined_ur_vitpose_le2i_vitpose/stgcn | overall | 0.9351 | 0.6525 | 0.8304 | 0.7307 | 0.9630 | 612 | 326 | 125 | 5883 | metrics.txt |
