@@ -1,0 +1,143 @@
+================================================================================
+MODEL: MLP
+================================================================================
+data_root: data/combined_blazepose_normalized_le2i_blazepose_normalized
+feature_mode: xy66
+input_dim: 1980
+window_size: 30
+stride: 1
+missing_mode: interp
+min_valid_frames: 1
+visibility_threshold: 0.3
+hidden: [256, 64]
+dropout: 0.3
+epochs: 100
+patience: 12
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.0001
+folds: 5
+seed: 42
+device: cuda:0
+annotation_csv: data/urfall-cam0-falls.csv
+label_level: window
+window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)
+
+[Fold 1.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 4934.000000
+test_windows: 1239.000000
+best_epoch: 25.000000
+val_f1: 0.794979
+accuracy: 0.907990
+precision: 0.575130
+recall: 0.776224
+f1: 0.660714
+roc_auc: 0.929269
+tn: 1014.000000
+fp: 82.000000
+fn: 32.000000
+tp: 111.000000
+
+[Fold 2.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 4939.000000
+test_windows: 1234.000000
+best_epoch: 29.000000
+val_f1: 0.798077
+accuracy: 0.913290
+precision: 0.584112
+recall: 0.874126
+f1: 0.700280
+roc_auc: 0.932666
+tn: 1002.000000
+fp: 89.000000
+fn: 18.000000
+tp: 125.000000
+
+[Fold 3.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 4943.000000
+test_windows: 1230.000000
+best_epoch: 16.000000
+val_f1: 0.778325
+accuracy: 0.898374
+precision: 0.609195
+recall: 0.650307
+f1: 0.629080
+roc_auc: 0.908027
+tn: 999.000000
+fp: 68.000000
+fn: 57.000000
+tp: 106.000000
+
+[Fold 4.0/5]
+train_videos: 141.000000
+test_videos: 36.000000
+train_windows: 4935.000000
+test_windows: 1238.000000
+best_epoch: 26.000000
+val_f1: 0.726457
+accuracy: 0.902262
+precision: 0.512438
+recall: 0.817460
+f1: 0.629969
+roc_auc: 0.939156
+tn: 1014.000000
+fp: 98.000000
+fn: 23.000000
+tp: 103.000000
+
+[Fold 5.0/5]
+train_videos: 141.000000
+test_videos: 36.000000
+train_windows: 4941.000000
+test_windows: 1232.000000
+best_epoch: 40.000000
+val_f1: 0.763485
+accuracy: 0.910714
+precision: 0.607656
+recall: 0.819355
+f1: 0.697802
+roc_auc: 0.940821
+tn: 995.000000
+fp: 82.000000
+fn: 28.000000
+tp: 127.000000
+
+================================================================================
+OVERALL OUT-OF-FOLD METRICS
+================================================================================
+accuracy: 0.906528
+precision: 0.577195
+recall: 0.783562
+f1: 0.664730
+roc_auc: 0.929912
+tn: 5024
+fp: 419
+fn: 158
+tp: 572
+
+Classification report:
+              precision    recall  f1-score   support
+
+         ADL     0.9695    0.9230    0.9457      5443
+        Fall     0.5772    0.7836    0.6647       730
+
+    accuracy                         0.9065      6173
+   macro avg     0.7734    0.8533    0.8052      6173
+weighted avg     0.9231    0.9065    0.9125      6173
+
+Confusion matrix [[TN, FP], [FN, TP]]:
+[[5024  419]
+ [ 158  572]]
+
+Fold mean +/- std:
+accuracy: 0.906526 +/- 0.006125
+precision: 0.577706 +/- 0.039358
+recall: 0.787494 +/- 0.084210
+f1: 0.663569 +/- 0.034807
+roc_auc: 0.929988 +/- 0.013147

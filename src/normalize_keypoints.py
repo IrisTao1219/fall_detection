@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -462,13 +463,24 @@ def process_npz(input_path, output_path):
 # 8. 批量处理 + 汇总诊断
 # ============================================================
 
-def main():
-    if not INPUT_ROOT.exists():
-        raise FileNotFoundError(f"输入目录不存在：{INPUT_ROOT}")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Normalize BlazePose keypoint NPZ files.")
+    parser.add_argument("--input-root", type=Path, default=INPUT_ROOT)
+    parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
+    return parser.parse_args()
 
-    npz_files = sorted(INPUT_ROOT.rglob("*.npz"))
+
+def main():
+    args = parse_args()
+    input_root = args.input_root
+    output_root = args.output_root
+
+    if not input_root.exists():
+        raise FileNotFoundError(f"输入目录不存在：{input_root}")
+
+    npz_files = sorted(input_root.rglob("*.npz"))
     if not npz_files:
-        raise RuntimeError(f"{INPUT_ROOT} 没有找到 npz 文件")
+        raise RuntimeError(f"{input_root} 没有找到 npz 文件")
 
     print(f"发现 {len(npz_files)} 个 keypoints 文件")
 
@@ -481,8 +493,8 @@ def main():
     low_scale_frame_videos = 0
 
     for input_path in tqdm(npz_files, desc="Normalizing"):
-        relative_path = input_path.relative_to(INPUT_ROOT)
-        output_path = OUTPUT_ROOT / relative_path
+        relative_path = input_path.relative_to(input_root)
+        output_path = output_root / relative_path
 
         stats = process_npz(input_path, output_path)
 
@@ -511,8 +523,8 @@ def main():
 
     print()
     print("归一化完成")
-    print(f"输入：{INPUT_ROOT}")
-    print(f"输出：{OUTPUT_ROOT}")
+    print(f"输入：{input_root}")
+    print(f"输出：{output_root}")
     print()
     print("========== 诊断统计 ==========")
     print(f"原始有效帧：{total_raw_valid}")

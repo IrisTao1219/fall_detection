@@ -72,6 +72,27 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import DataLoader, Dataset
 
+try:
+    from . import common as experiment_common
+    from .common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        load_sequence_windows,
+        seed_everything,
+        video_type_labels,
+    )
+except ImportError:
+    import common as experiment_common
+    from common import (
+        choose_device,
+        compute_metrics,
+        fmt_metric,
+        load_sequence_windows,
+        seed_everything,
+        video_type_labels,
+    )
+
 
 # -----------------------------
 # Constants
@@ -264,359 +285,6 @@ def video_type_labels(groups: np.ndarray) -> np.ndarray:
 # Missing-value preprocessing
 # -----------------------------
 
-def interpolate_1d(values: np.ndarray) -> np.ndarray:
-    """
-    Linear interpolation along time.
-    If all values are missing, returns zeros.
-    Edge NaNs are filled with the nearest valid value.
-    """
-    out = values.astype(np.float32, copy=True)
-    idx = np.arange(len(out))
-    valid = np.isfinite(out)
-
-    if not np.any(valid):
-        return np.zeros_like(out, dtype=np.float32)
-
-    out[~valid] = np.interp(idx[~valid], idx[valid], out[valid])
-    return out
-
-
-def preprocess_keypoints(
-    keypoints: np.ndarray,
-    valid_mask: Optional[np.ndarray],
-    visibility_threshold: float,
-    missing_mode: str,
-) -> np.ndarray:
-    """
-    Return cleaned x/y tensor with shape [T, 33, 2].
-
-    A frame/joint is considered missing when:
-      - x or y is NaN/inf
-      - frame valid_mask is False
-      - visibility exists and is below threshold
-
-    missing_mode:
-      mask   -> leave missing coordinates as NaN for window-level processing
-      zero   -> unidentified joints become [0, 0]
-      interp -> temporal interpolation over the full video (legacy behavior)
-    """
-    if keypoints.ndim != 3 or keypoints.shape[1] != 33 or keypoints.shape[2] < 2:
-        raise ValueError(
-            f"Expected keypoints [T,33,C>=2], got shape {keypoints.shape}"
-        )
-
-    xy = keypoints[..., :2].astype(np.float32, copy=True)
-    T = xy.shape[0]
-
-    joint_valid = np.isfinite(xy).all(axis=-1)
-
-    if keypoints.shape[2] >= 4:
-        visibility = keypoints[..., 3]
-        joint_valid &= np.isfinite(visibility) & (visibility >= visibility_threshold)
-
-    if valid_mask is not None:
-        valid_mask = np.asarray(valid_mask).reshape(-1).astype(bool)
-        if len(valid_mask) != T:
-            raise ValueError(
-                f"valid_mask length {len(valid_mask)} != keypoints frames {T}"
-            )
-        joint_valid &= valid_mask[:, None]
-
-    xy[~joint_valid] = np.nan
-
-    if missing_mode == "mask":
-        pass
-    elif missing_mode == "zero":
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-
-    elif missing_mode == "interp":
-        for joint_idx in range(xy.shape[1]):
-            for coord_idx in range(2):
-                xy[:, joint_idx, coord_idx] = interpolate_1d(
-                    xy[:, joint_idx, coord_idx]
-                )
-        xy = np.nan_to_num(xy, nan=0.0, posinf=0.0, neginf=0.0)
-
-    else:
-        raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-    return xy.astype(np.float32)
-
-
-# -----------------------------
-# Feature construction
-# -----------------------------
-
-def build_frame_features(
-    xy: np.ndarray,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-) -> np.ndarray:
-    """
-    xy66:
-        33 joints * (x,y) = 66-D per frame.
-
-    joints16:
-        exactly 8 user-selected joints * (x,y) = 16-D per frame.
-        This mode is intentionally explicit because the paper does not
-        document which 16 scalar dimensions were used.
-    """
-    if feature_mode == "xy66":
-        return xy.reshape(xy.shape[0], -1).astype(np.float32)
-
-    if feature_mode == "joints16":
-        if joint_indices is None or len(joint_indices) != 8:
-            raise ValueError(
-                "--feature-mode joints16 requires exactly 8 indices via "
-                "--joint-indices, e.g. 11,12,23,24,25,26,27,28"
-            )
-        idx = np.asarray(joint_indices, dtype=np.int64)
-        if np.any(idx < 0) or np.any(idx >= 33):
-            raise ValueError("All joint indices must be in [0, 32]")
-        return xy[:, idx, :].reshape(xy.shape[0], 16).astype(np.float32)
-
-    raise ValueError(f"Unknown feature_mode: {feature_mode}")
-
-
-# -----------------------------
-# Window generation
-# -----------------------------
-
-@dataclass
-class WindowRecord:
-    video_id: str
-    source_file: str
-    start_frame: int
-    end_frame: int
-    label: int
-
-
-def make_windows(
-    features: np.ndarray,
-    video_level_label: int,
-    video_id: str,
-    source_file: str,
-    window_size: int,
-    stride: int,
-    frame_indices: np.ndarray,
-    sequence_annotations: Optional[Dict[int, int]],
-    valid_mask: Optional[np.ndarray] = None,
-    min_valid_frames: int = 1,
-    missing_mode: str = "interp",
-) -> Tuple[List[np.ndarray], List[int], List[WindowRecord]]:
-    T = features.shape[0]
-
-    if T < window_size:
-        return [], [], []
-
-    frame_indices = np.asarray(frame_indices).reshape(-1)
-    if len(frame_indices) != T:
-        raise ValueError(
-            f"frame_indices length {len(frame_indices)} != feature frames {T}"
-        )
-
-    X_list: List[np.ndarray] = []
-    y_list: List[int] = []
-    records: List[WindowRecord] = []
-
-    for start in range(0, T - window_size + 1, stride):
-        end = start + window_size
-
-        if (
-            valid_mask is not None
-            and int(np.count_nonzero(valid_mask[start:end])) < min_valid_frames
-        ):
-            continue
-
-        # Window label: exactly the same UR-Fall CSV rule as RF/ST-GCN/MLP.
-        if video_level_label == 0:
-            # ADL videos are normal for the whole sequence.
-            y_win = 0
-        else:
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"Missing frame annotations for fall video {video_id}"
-                )
-
-            posture_labels: List[int] = []
-            for frame_number in frame_indices[start:end]:
-                posture_label = sequence_annotations.get(int(frame_number))
-                if posture_label is not None:
-                    posture_labels.append(posture_label)
-
-            y_from_csv = get_window_label_from_urfall(posture_labels)
-            if y_from_csv is None:
-                # All annotated frames are posture 0, no annotations are present,
-                # or -1/1 are tied after ignoring 0.
-                continue
-            y_win = int(y_from_csv)
-
-        x_win = features[start:end].copy()
-        if missing_mode == "interp":
-            for feature_idx in range(x_win.shape[1]):
-                x_win[:, feature_idx] = interpolate_1d(x_win[:, feature_idx])
-        elif missing_mode == "zero":
-            x_win = np.nan_to_num(x_win, nan=0.0, posinf=0.0, neginf=0.0)
-        else:
-            raise ValueError(f"Unknown missing_mode: {missing_mode}")
-
-        X_list.append(x_win.astype(np.float32))
-        y_list.append(y_win)
-        records.append(
-            WindowRecord(
-                video_id=video_id,
-                source_file=source_file,
-                start_frame=int(frame_indices[start]),
-                end_frame=int(frame_indices[end - 1]),
-                label=y_win,
-            )
-        )
-
-    return X_list, y_list, records
-
-
-# -----------------------------
-# Dataset loading
-# -----------------------------
-
-def discover_npz_files(root: Path) -> List[Path]:
-    files = sorted(root.rglob("*.npz"))
-    if not files:
-        raise FileNotFoundError(f"No .npz files found under: {root}")
-    return files
-
-
-def load_all_windows(
-    data_root: Path,
-    window_size: int,
-    stride: int,
-    visibility_threshold: float,
-    missing_mode: str,
-    feature_mode: str,
-    joint_indices: Optional[Sequence[int]],
-    min_valid_frames: int = 1,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    X_all: List[np.ndarray] = []
-    y_all: List[int] = []
-    groups_all: List[str] = []
-    records_all: List[WindowRecord] = []
-
-    files = discover_npz_files(data_root)
-    fall_annotations = load_fall_frame_labels(FALL_ANNOTATION_CSV)
-    skipped_short = 0
-    skipped_no_valid_windows = 0
-
-    for path in files:
-        with np.load(path, allow_pickle=True) as d:
-            if "keypoints" not in d:
-                raise KeyError(f"{path}: missing 'keypoints'")
-
-            keypoints = d["keypoints"]
-            valid_mask = d["valid_mask"] if "valid_mask" in d else None
-
-            if "label" in d:
-                label_data = d["label"]
-            else:
-                label_data = path.parent.name
-
-            if "video_id" in d:
-                raw_video_id = d["video_id"]
-                if isinstance(raw_video_id, np.ndarray) and raw_video_id.ndim == 0:
-                    raw_video_id = raw_video_id.item()
-                if isinstance(raw_video_id, bytes):
-                    raw_video_id = raw_video_id.decode("utf-8")
-                video_id = str(raw_video_id)
-            else:
-                video_id = path.stem
-
-            num_frames = keypoints.shape[0]
-            if "frame_indices" in d:
-                frame_indices = np.asarray(d["frame_indices"]).reshape(-1)
-            else:
-                # UR-Fall CSV frame numbering is 1-based.
-                frame_indices = np.arange(1, num_frames + 1, dtype=np.int64)
-
-        sequence_name = canonical_sequence_name(video_id)
-        if sequence_name is None:
-            sequence_name = canonical_sequence_name(path.stem)
-
-        # Prefer the UR-Fall sequence name for deciding original video type.
-        # Fall videos are re-labeled per window from the official CSV.
-        if sequence_name is not None:
-            video_level_label = 1 if sequence_name.startswith("fall-") else 0
-        else:
-            video_level_label = normalize_label(label_data)
-
-        sequence_annotations: Optional[Dict[int, int]] = None
-        if video_level_label == 1:
-            if sequence_name is None:
-                raise RuntimeError(
-                    f"Cannot parse UR-Fall sequence name from {video_id} / {path.name}"
-                )
-            sequence_annotations = fall_annotations.get(sequence_name)
-            if sequence_annotations is None:
-                raise RuntimeError(
-                    f"{video_id} -> {sequence_name} has no frame annotations in "
-                    f"{FALL_ANNOTATION_CSV}"
-                )
-
-        xy = preprocess_keypoints(
-            keypoints=keypoints,
-            valid_mask=valid_mask,
-            visibility_threshold=visibility_threshold,
-            missing_mode="mask",
-        )
-
-        features = build_frame_features(
-            xy=xy,
-            feature_mode=feature_mode,
-            joint_indices=joint_indices,
-        )
-
-        X_list, y_list, records = make_windows(
-            features=features,
-            video_level_label=video_level_label,
-            video_id=video_id,
-            source_file=str(path),
-            window_size=window_size,
-            stride=stride,
-            frame_indices=frame_indices,
-            sequence_annotations=sequence_annotations,
-            valid_mask=valid_mask,
-            min_valid_frames=min_valid_frames,
-            missing_mode=missing_mode,
-        )
-
-        if num_frames < window_size:
-            skipped_short += 1
-            continue
-        if not X_list:
-            skipped_no_valid_windows += 1
-            continue
-
-        X_all.extend(X_list)
-        y_all.extend(y_list)
-        groups_all.extend([video_id] * len(X_list))
-        records_all.extend(records)
-
-    if not X_all:
-        raise RuntimeError("No valid windows were generated.")
-
-    X = np.stack(X_all).astype(np.float32)
-    y = np.asarray(y_all, dtype=np.int64)
-    groups = np.asarray(groups_all)
-    records_df = pd.DataFrame([asdict(r) for r in records_all])
-
-    print(
-        f"Loaded {len(files)} NPZ videos | "
-        f"windows={len(X)} | shape={X.shape} | "
-        f"ADL={int((y == 0).sum())} | Fall={int((y == 1).sum())} | "
-        f"short_videos_skipped={skipped_short} | "
-        f"no_valid_windows_skipped={skipped_no_valid_windows}"
-    )
-
-    return X, y, groups, records_df
-
 
 # -----------------------------
 # Standardization
@@ -715,29 +383,37 @@ class RecurrentClassifier(nn.Module):
 
 def train_one_model(
     model: nn.Module,
-    loader: DataLoader,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    y_val: np.ndarray,
     device: torch.device,
     epochs: int,
+    patience: int,
     learning_rate: float,
     weight_decay: float,
     grad_clip: float,
-) -> List[float]:
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
+    class_weights: torch.Tensor,
+) -> Tuple[List[Dict[str, float]], int, float]:
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=learning_rate,
         weight_decay=weight_decay,
     )
 
     model.to(device)
-    history: List[float] = []
+    history: List[Dict[str, float]] = []
+    best_state: Optional[Dict[str, torch.Tensor]] = None
+    best_epoch = 0
+    best_f1 = -1.0
+    best_loss = float("inf")
 
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         seen = 0
 
-        for xb, yb in loader:
+        for xb, yb in train_loader:
             xb = xb.to(device)
             yb = yb.to(device)
 
@@ -756,12 +432,43 @@ def train_one_model(
             seen += batch_n
 
         epoch_loss = running_loss / max(seen, 1)
-        history.append(epoch_loss)
+        _, val_prob = predict(model, val_loader, device)
+        val_pred = (val_prob >= 0.5).astype(np.int64)
+        val_f1 = compute_metrics(y_val, val_pred, val_prob)["f1"]
+        history.append(
+            {
+                "epoch": float(epoch),
+                "train_loss": float(epoch_loss),
+                "val_f1": float(val_f1),
+            }
+        )
+
+        if val_f1 > best_f1 or (val_f1 == best_f1 and epoch_loss < best_loss):
+            best_f1 = float(val_f1)
+            best_loss = float(epoch_loss)
+            best_epoch = epoch
+            best_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
 
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs:
-            print(f"    epoch {epoch:03d}/{epochs} | train_loss={epoch_loss:.6f}")
+            print(
+                f"    epoch {epoch:03d}/{epochs} | "
+                f"train_loss={epoch_loss:.6f} | val_f1={val_f1:.6f}"
+            )
 
-    return history
+        if epoch - best_epoch >= patience:
+            print(
+                f"    early stop at epoch {epoch:03d}; "
+                f"best_epoch={best_epoch}, best_val_f1={best_f1:.6f}"
+            )
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return history, best_epoch, best_f1
 
 
 @torch.no_grad()
@@ -828,6 +535,13 @@ def fmt_metric(v: float) -> str:
     return f"{v:.6f}" if isinstance(v, float) else str(v)
 
 
+seed_everything = experiment_common.seed_everything
+choose_device = experiment_common.choose_device
+video_type_labels = experiment_common.video_type_labels
+compute_metrics = experiment_common.compute_metrics
+fmt_metric = experiment_common.fmt_metric
+
+
 # -----------------------------
 # Cross-validation experiment
 # -----------------------------
@@ -854,7 +568,7 @@ def run_model_cv(
 
     # Stratify by the ORIGINAL video type (adl/fall), not by the majority
     # of window labels. A fall video can legitimately contain many ADL windows.
-    split_y = video_type_labels(groups)
+    split_y = experiment_common.group_stratification_labels(y, groups)
     unique_group_types = (
         pd.DataFrame({"group": groups, "video_type": split_y})
         .drop_duplicates("group")
@@ -886,32 +600,34 @@ def run_model_cv(
     all_test_indices: List[int] = []
     fold_rows: List[Dict[str, float]] = []
 
-    metrics_lines: List[str] = []
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("MODEL: LSTM")
-    metrics_lines.append("=" * 80)
-    metrics_lines.append(f"data_root: {args.data_root}")
-    metrics_lines.append(f"annotation_csv: {FALL_ANNOTATION_CSV}")
-    metrics_lines.append("label_level: window")
-    metrics_lines.append("urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1")
-    metrics_lines.append(f"feature_mode: {args.feature_mode}")
-    metrics_lines.append(f"input_dim: {X.shape[-1]}")
-    metrics_lines.append(f"window_size: {args.window_size}")
-    metrics_lines.append(f"stride: {args.stride}")
-    metrics_lines.append(f"missing_mode: {args.missing_mode}")
-    metrics_lines.append(f"min_valid_frames: {args.min_valid_frames}")
-    metrics_lines.append(f"visibility_threshold: {args.visibility_threshold}")
-    metrics_lines.append(f"hidden_size: {args.hidden_size}")
-    metrics_lines.append(f"num_layers: {args.num_layers}")
-    metrics_lines.append(f"dropout: {args.dropout}")
-    metrics_lines.append(f"epochs: {args.epochs}")
-    metrics_lines.append(f"batch_size: {args.batch_size}")
-    metrics_lines.append(f"learning_rate: {args.learning_rate}")
-    metrics_lines.append(f"weight_decay: {args.weight_decay}")
-    metrics_lines.append(f"folds: {n_splits}")
-    metrics_lines.append(f"seed: {args.seed}")
-    metrics_lines.append(f"device: {device}")
-    metrics_lines.append("")
+    metrics_header = [
+        f"data_root: {args.data_root}",
+        f"annotation_csv: {FALL_ANNOTATION_CSV}",
+        "label_level: window",
+        "urfall_window_label_rule: ignore_0_then_majority_vote_-1_vs_1",
+        f"feature_mode: {args.feature_mode}",
+        f"input_dim: {X.shape[-1]}",
+        f"window_size: {X.shape[1]}",
+        f"configured_window_size: {args.window_size}",
+        f"configured_stride: {args.stride}",
+        f"missing_mode: {args.missing_mode}",
+        f"min_valid_frames: {args.min_valid_frames}",
+        f"visibility_threshold: {args.visibility_threshold}",
+        f"hidden_size: {args.hidden_size}",
+        f"num_layers: {args.num_layers}",
+        f"dropout: {args.dropout}",
+        f"epochs: {args.epochs}",
+        f"patience: {args.patience}",
+        f"batch_size: {args.batch_size}",
+        f"learning_rate: {args.learning_rate}",
+        f"weight_decay: {args.weight_decay}",
+        f"threshold_objective: {args.threshold_objective}",
+        f"min_recall: {args.min_recall}",
+        f"folds: {n_splits}",
+        f"seed: {args.seed}",
+        f"device: {device}",
+        "label_level: window",
+    ]
 
     for fold, (train_idx, test_idx) in enumerate(
         splitter.split(X, split_y, groups=groups),
@@ -923,24 +639,57 @@ def run_model_cv(
             f"train_windows={len(train_idx)} | test_windows={len(test_idx)}"
         )
 
+        experiment_common.assert_disjoint_groups(
+            groups,
+            train_idx,
+            test_idx,
+            "outer_train",
+            "outer_test",
+        )
         train_groups = set(groups[train_idx])
         test_groups = set(groups[test_idx])
-        overlap = train_groups & test_groups
-        if overlap:
-            raise RuntimeError(f"Video leakage detected: {sorted(overlap)[:5]}")
 
         # Fit standardizer ONLY on this fold's training data.
         scaler = SequenceStandardizer.fit(X[train_idx])
-        X_train = scaler.transform(X[train_idx])
+        X_train_all = scaler.transform(X[train_idx])
         X_test = scaler.transform(X[test_idx])
 
-        y_train = y[train_idx]
+        y_train_all = y[train_idx]
         y_test = y[test_idx]
+        train_groups_array = groups[train_idx]
+
+        fit_idx, val_idx = experiment_common.inner_group_split_by_video_type(
+            y_train_all,
+            train_groups_array,
+            seed=args.seed + fold,
+        )
+        X_fit = X_train_all[fit_idx]
+        y_fit = y_train_all[fit_idx]
+        X_val = X_train_all[val_idx]
+        y_val = y_train_all[val_idx]
+
+        counts = np.bincount(y_fit, minlength=2)
+        if np.any(counts == 0):
+            raise RuntimeError(
+                f"Fold {fold}: inner training split is missing a class: {counts.tolist()}"
+            )
+        class_weights = torch.tensor(
+            len(y_fit) / (2.0 * counts),
+            dtype=torch.float32,
+            device=device,
+        )
 
         train_loader = DataLoader(
-            WindowDataset(X_train, y_train),
+            WindowDataset(X_fit, y_fit),
             batch_size=args.batch_size,
             shuffle=True,
+            num_workers=0,
+            drop_last=False,
+        )
+        val_loader = DataLoader(
+            WindowDataset(X_val, y_val),
+            batch_size=args.batch_size,
+            shuffle=False,
             num_workers=0,
             drop_last=False,
         )
@@ -962,21 +711,41 @@ def run_model_cv(
             num_classes=2,
         )
 
-        history = train_one_model(
+        history, best_epoch, best_val_f1 = train_one_model(
             model=model,
-            loader=train_loader,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            y_val=y_val,
             device=device,
             epochs=args.epochs,
+            patience=args.patience,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             grad_clip=args.grad_clip,
+            class_weights=class_weights,
         )
 
-        y_pred, y_prob = predict(model, test_loader, device)
+        _, val_prob = predict(model, val_loader, device)
+        threshold, threshold_metrics = experiment_common.tune_threshold(
+            y_val,
+            val_prob,
+            objective=args.threshold_objective,
+            min_recall=args.min_recall,
+        )
+        _, y_prob = predict(model, test_loader, device)
+        y_pred = (y_prob >= threshold).astype(np.int64)
         fold_metrics = compute_metrics(y_test, y_pred, y_prob)
         fold_metrics["fold"] = fold
         fold_metrics["train_videos"] = len(train_groups)
         fold_metrics["test_videos"] = len(test_groups)
+        fold_metrics["train_windows"] = len(train_idx)
+        fold_metrics["test_windows"] = len(test_idx)
+        fold_metrics["fit_windows"] = len(fit_idx)
+        fold_metrics["val_windows"] = len(val_idx)
+        fold_metrics["best_epoch"] = best_epoch
+        fold_metrics["val_f1"] = best_val_f1
+        fold_metrics["threshold"] = threshold
+        fold_metrics["threshold_val_f1"] = threshold_metrics["f1"]
         fold_rows.append(fold_metrics)
 
         print(
@@ -992,25 +761,6 @@ def run_model_cv(
             f"FN={fold_metrics['fn']} TP={fold_metrics['tp']}"
         )
 
-        metrics_lines.append(f"[Fold {fold}/{n_splits}]")
-        metrics_lines.append(f"train_videos: {len(train_groups)}")
-        metrics_lines.append(f"test_videos: {len(test_groups)}")
-        metrics_lines.append(f"train_windows: {len(train_idx)}")
-        metrics_lines.append(f"test_windows: {len(test_idx)}")
-        for key in [
-            "accuracy",
-            "precision",
-            "recall",
-            "f1",
-            "roc_auc",
-            "tn",
-            "fp",
-            "fn",
-            "tp",
-        ]:
-            metrics_lines.append(f"{key}: {fmt_metric(fold_metrics[key])}")
-        metrics_lines.append("")
-
         # Save fold checkpoint + training history.
         checkpoint = {
             "model_type": "lstm",
@@ -1021,6 +771,12 @@ def run_model_cv(
             "state_dict": model.state_dict(),
             "feature_mean": scaler.mean,
             "feature_std": scaler.std,
+            "threshold": threshold,
+            "threshold_objective": args.threshold_objective,
+            "min_recall": args.min_recall,
+            "best_epoch": best_epoch,
+            "best_val_f1": best_val_f1,
+            "class_weights": class_weights.detach().cpu().numpy(),
             "args": vars(args).copy(),
         }
         # Convert Path values so checkpoint metadata is serializable/readable.
@@ -1029,12 +785,10 @@ def run_model_cv(
                 checkpoint["args"][k] = str(v)
 
         torch.save(checkpoint, models_dir / f"fold_{fold}.pt")
-        pd.DataFrame(
-            {
-                "epoch": np.arange(1, len(history) + 1),
-                "train_loss": history,
-            }
-        ).to_csv(histories_dir / f"fold_{fold}_history.csv", index=False)
+        pd.DataFrame(history).to_csv(
+            histories_dir / f"fold_{fold}_history.csv",
+            index=False,
+        )
 
         all_true.extend(y_test.tolist())
         all_pred.extend(y_pred.tolist())
@@ -1045,6 +799,12 @@ def run_model_cv(
     y_true_all = np.asarray(all_true, dtype=np.int64)
     y_pred_all = np.asarray(all_pred, dtype=np.int64)
     y_prob_all = np.asarray(all_prob, dtype=np.float32)
+
+    pred_df = records_df.iloc[all_test_indices].copy().reset_index(drop=True)
+    pred_df["y_true"] = y_true_all
+    pred_df["y_pred"] = y_pred_all
+    pred_df["fall_probability"] = y_prob_all
+    pred_df.to_csv(model_dir / "predictions.csv", index=False)
 
     overall = compute_metrics(y_true_all, y_pred_all, y_prob_all)
     cm = confusion_matrix(y_true_all, y_pred_all, labels=[0, 1])
@@ -1057,39 +817,25 @@ def run_model_cv(
         zero_division=0,
     )
 
-    metrics_lines.append("=" * 80)
-    metrics_lines.append("OVERALL OUT-OF-FOLD METRICS")
-    metrics_lines.append("=" * 80)
-    for key in [
-        "accuracy",
-        "precision",
-        "recall",
-        "f1",
-        "roc_auc",
-        "tn",
-        "fp",
-        "fn",
-        "tp",
-    ]:
-        metrics_lines.append(f"{key}: {fmt_metric(overall[key])}")
-
-    metrics_lines.append("")
-    metrics_lines.append("Classification report:")
-    metrics_lines.append(report)
-    metrics_lines.append("Confusion matrix [[TN, FP], [FN, TP]]:")
-    metrics_lines.append(np.array2string(cm))
-
-    # Mean/std of fold metrics (useful for model comparison)
     fold_df = pd.DataFrame(fold_rows)
-    metrics_lines.append("")
-    metrics_lines.append("Fold mean ± std:")
-    for key in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
-        mean_v = fold_df[key].mean()
-        std_v = fold_df[key].std(ddof=1)
-        metrics_lines.append(f"{key}: {mean_v:.6f} ± {std_v:.6f}")
-
-    metrics_path = model_dir / "metrics.txt"
-    metrics_path.write_text("\n".join(metrics_lines), encoding="utf-8")
+    experiment_common.save_experiment_metrics_text(
+        output=model_dir,
+        model="lstm",
+        header=metrics_header,
+        fold_rows=fold_df,
+        overall=overall,
+        y_true=y_true_all,
+        y_pred=y_pred_all,
+        confusion=cm,
+    )
+    experiment_common.save_experiment_metrics_json(
+        output=model_dir,
+        model="lstm",
+        data_root=args.data_root,
+        overall=overall,
+        fold_rows=fold_df,
+        device=device,
+    )
 
     fold_df.to_csv(model_dir / "fold_metrics.csv", index=False)
 
@@ -1098,13 +844,6 @@ def run_model_cv(
         index=["true_ADL", "true_Fall"],
         columns=["pred_ADL", "pred_Fall"],
     ).to_csv(model_dir / "confusion_matrix.csv")
-
-    # OOF predictions aligned to original window metadata.
-    pred_df = records_df.iloc[all_test_indices].copy().reset_index(drop=True)
-    pred_df["y_true"] = y_true_all
-    pred_df["y_pred"] = y_pred_all
-    pred_df["fall_probability"] = y_prob_all
-    pred_df.to_csv(model_dir / "predictions.csv", index=False)
 
     print("\n" + "=" * 72)
     print("LSTM OVERALL")
@@ -1116,7 +855,7 @@ def run_model_cv(
         f"ROC-AUC={fmt_metric(overall['roc_auc'])}"
     )
     print(report)
-    print(f"Saved: {metrics_path}")
+    print(f"Saved: {model_dir / 'metrics.txt'}")
 
 
 # -----------------------------
@@ -1141,6 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/keypoints_normalized"),
         help="Root containing label subfolders and .npz files.",
     )
+    p.add_argument("--windows-cache", type=Path, required=True)
     p.add_argument(
         "--output-root",
         type=Path,
@@ -1164,8 +904,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated 8 BlazePose indices for joints16 mode.",
     )
 
-    p.add_argument("--window-size", type=int, default=30)
-    p.add_argument("--stride", type=int, default=1)
+    p.add_argument("--window-size", type=int, default=45)
+    p.add_argument("--stride", type=int, default=15)
 
     p.add_argument(
         "--missing-mode",
@@ -1177,15 +917,28 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Minimum detected-pose frames required per window (RF default: 1).")
     p.add_argument("--visibility-threshold", type=float, default=0.3)
 
-    p.add_argument("--hidden-size", type=int, default=80)
-    p.add_argument("--num-layers", type=int, default=10)
-    p.add_argument("--dropout", type=float, default=0.0)
+    p.add_argument("--hidden-size", type=int, default=128)
+    p.add_argument("--num-layers", type=int, default=2)
+    p.add_argument("--dropout", type=float, default=0.3)
 
-    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--patience", type=int, default=12)
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--grad-clip", type=float, default=5.0)
+    p.add_argument(
+        "--threshold-objective",
+        choices=["accuracy", "precision", "recall", "f1"],
+        default="f1",
+        help="Metric optimized on the inner validation split to choose the decision threshold.",
+    )
+    p.add_argument(
+        "--min-recall",
+        type=float,
+        default=0.0,
+        help="Minimum validation recall required when choosing the threshold.",
+    )
 
     p.add_argument("--folds", type=int, default=5)
     p.add_argument("--seed", type=int, default=42)
@@ -1230,16 +983,19 @@ def main() -> None:
         f"feature_mode={args.feature_mode}, missing_mode={args.missing_mode}"
     )
 
-    X, y, groups, records_df = load_all_windows(
-        data_root=args.data_root,
-        window_size=args.window_size,
-        stride=args.stride,
-        visibility_threshold=args.visibility_threshold,
-        missing_mode=args.missing_mode,
-        feature_mode=args.feature_mode,
-        joint_indices=args.joint_indices,
-        min_valid_frames=args.min_valid_frames,
+    X, y, groups, records_df, cache_config = experiment_common.load_windows_cache(
+        args.windows_cache
     )
+    actual_window_size = int(X.shape[1])
+    actual_stride = None
+    if {"video_id", "start_frame"}.issubset(records_df.columns):
+        stride_candidates: List[int] = []
+        for _, frame in records_df.groupby("video_id"):
+            starts = np.sort(frame["start_frame"].to_numpy(dtype=np.int64))
+            diffs = np.diff(starts)
+            stride_candidates.extend(int(diff) for diff in diffs if diff > 0)
+        if stride_candidates:
+            actual_stride = int(pd.Series(stride_candidates).mode().iloc[0])
 
     # Save experiment configuration.
     config = vars(args).copy()
@@ -1251,6 +1007,9 @@ def main() -> None:
             "annotation_csv": str(FALL_ANNOTATION_CSV),
             "label_level": "window",
             "urfall_window_label_rule": "ignore_0_then_majority_vote_-1_vs_1",
+            "actual_window_size": actual_window_size,
+            "actual_stride": actual_stride,
+            "cache_config": cache_config,
         }
     )
     (args.experiment_output_dir / "config.json").write_text(

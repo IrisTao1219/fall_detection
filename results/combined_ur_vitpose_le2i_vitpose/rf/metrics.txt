@@ -1,0 +1,97 @@
+================================================================================
+MODEL: RF
+================================================================================
+data_root: data/combined_ur_vitpose_le2i_vitpose
+experiment: rf
+videos: 177
+windows: 6946
+features: 1020
+window_seconds: 1.0
+window_stride: 1
+folds: 5
+label_level: window
+
+[Fold 1.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 5554.000000
+test_windows: 1392.000000
+accuracy: 0.919540
+precision: 0.567308
+recall: 0.842857
+f1: 0.678161
+roc_auc: 0.972949
+
+[Fold 2.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 5559.000000
+test_windows: 1387.000000
+accuracy: 0.937996
+precision: 0.673367
+recall: 0.864516
+f1: 0.757062
+roc_auc: 0.982962
+
+[Fold 3.0/5]
+train_videos: 142.000000
+test_videos: 35.000000
+train_windows: 5558.000000
+test_windows: 1388.000000
+accuracy: 0.945965
+precision: 0.714286
+recall: 0.798611
+f1: 0.754098
+roc_auc: 0.967826
+
+[Fold 4.0/5]
+train_videos: 141.000000
+test_videos: 36.000000
+train_windows: 5554.000000
+test_windows: 1392.000000
+accuracy: 0.961925
+precision: 0.768750
+recall: 0.884892
+f1: 0.822742
+roc_auc: 0.981704
+
+[Fold 5.0/5]
+train_videos: 141.000000
+test_videos: 36.000000
+train_windows: 5559.000000
+test_windows: 1387.000000
+accuracy: 0.950973
+precision: 0.763006
+recall: 0.830189
+f1: 0.795181
+roc_auc: 0.975224
+
+================================================================================
+OVERALL OUT-OF-FOLD METRICS
+================================================================================
+accuracy: 0.943277
+precision: 0.690344
+recall: 0.843962
+f1: 0.759463
+roc_auc: 0.975351
+
+Classification report:
+              precision    recall  f1-score   support
+
+         ADL     0.9810    0.9551    0.9678      6209
+        Fall     0.6903    0.8440    0.7595       737
+
+    accuracy                         0.9433      6946
+   macro avg     0.8357    0.8995    0.8637      6946
+weighted avg     0.9501    0.9433    0.9457      6946
+
+Confusion matrix [[TN, FP], [FN, TP]]:
+[[5930  279]
+ [ 115  622]]
+
+Fold mean +/- std:
+accuracy: 0.943280 +/- 0.015855
+precision: 0.697343 +/- 0.082434
+recall: 0.844213 +/- 0.032959
+f1: 0.761449 +/- 0.054555
+roc_auc: 0.976133 +/- 0.006278

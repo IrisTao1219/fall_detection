@@ -1,0 +1,134 @@
+================================================================================
+MODEL: STGCN
+================================================================================
+data_root: data/keypoints_ur
+feature_mode: xy66
+input_shape_per_window: [30, 33, 2]
+graph: BlazePose 33-joint physical graph
+window_size: 30
+stride: 1
+missing_mode: interp
+visibility_threshold: 0.3
+channels: (64, 64, 64, 64, 128, 128, 128, 256, 256, 256)
+temporal_kernel_size: 9
+dropout: 0.3
+epochs: 100
+patience: 12
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.0001
+folds: 5
+seed: 42
+device: cuda:1
+annotation_csv: data/urfall-cam0-falls.csv
+label_level: window
+window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)
+
+[Fold 1.0/5]
+train_videos: 56.000000
+test_videos: 14.000000
+train_windows: 432.000000
+test_windows: 109.000000
+accuracy: 0.990826
+precision: 1.000000
+recall: 0.900000
+f1: 0.947368
+roc_auc: 1.000000
+tn: 99.000000
+fp: 0.000000
+fn: 1.000000
+tp: 9.000000
+
+[Fold 2.0/5]
+train_videos: 56.000000
+test_videos: 14.000000
+train_windows: 433.000000
+test_windows: 108.000000
+accuracy: 1.000000
+precision: 1.000000
+recall: 1.000000
+f1: 1.000000
+roc_auc: 1.000000
+tn: 98.000000
+fp: 0.000000
+fn: 0.000000
+tp: 10.000000
+
+[Fold 3.0/5]
+train_videos: 56.000000
+test_videos: 14.000000
+train_windows: 433.000000
+test_windows: 108.000000
+accuracy: 1.000000
+precision: 1.000000
+recall: 1.000000
+f1: 1.000000
+roc_auc: 1.000000
+tn: 99.000000
+fp: 0.000000
+fn: 0.000000
+tp: 9.000000
+
+[Fold 4.0/5]
+train_videos: 56.000000
+test_videos: 14.000000
+train_windows: 433.000000
+test_windows: 108.000000
+accuracy: 0.953704
+precision: 0.714286
+recall: 0.909091
+f1: 0.800000
+roc_auc: 0.991565
+tn: 93.000000
+fp: 4.000000
+fn: 1.000000
+tp: 10.000000
+
+[Fold 5.0/5]
+train_videos: 56.000000
+test_videos: 14.000000
+train_windows: 433.000000
+test_windows: 108.000000
+accuracy: 1.000000
+precision: 1.000000
+recall: 1.000000
+f1: 1.000000
+roc_auc: 1.000000
+tn: 97.000000
+fp: 0.000000
+fn: 0.000000
+tp: 11.000000
+
+================================================================================
+OVERALL OUT-OF-FOLD METRICS
+================================================================================
+accuracy: 0.988909
+precision: 0.924528
+recall: 0.960784
+f1: 0.942308
+roc_auc: 0.998159
+tn: 486
+fp: 4
+fn: 2
+tp: 49
+
+Classification report:
+              precision    recall  f1-score   support
+
+         ADL     0.9959    0.9918    0.9939       490
+        Fall     0.9245    0.9608    0.9423        51
+
+    accuracy                         0.9889       541
+   macro avg     0.9602    0.9763    0.9681       541
+weighted avg     0.9892    0.9889    0.9890       541
+
+Confusion matrix [[TN, FP], [FN, TP]]:
+[[486   4]
+ [  2  49]]
+
+Fold mean +/- std:
+accuracy: 0.988906 +/- 0.020076
+precision: 0.942857 +/- 0.127775
+recall: 0.961818 +/- 0.052381
+f1: 0.949474 +/- 0.086611
+roc_auc: 0.998313 +/- 0.003772

@@ -1,0 +1,124 @@
+================================================================================
+MODEL: TRANSFORMER
+================================================================================
+data_root: data/combined_ur_blazepose_le2i_blazepose
+pose_estimator: unspecified
+dataset: unspecified
+joint_count: 33
+input_dim: 66
+window_size: 30
+normalization: zscore
+d_model: 128
+heads: 4
+layers: 2
+feedforward_dim: 512
+dropout: 0.3
+epochs: 100
+patience: 12
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.0001
+metric_objective: accuracy
+min_recall: 0.7
+video_aggregation: topk_mean
+video_topk: 5
+folds: 5
+seeds: [42]
+split_seed: 42
+device: cuda:1
+label_level: window
+window_label_rule: ignore posture 0; majority vote -1(normal) vs 1(fall)
+
+[Fold 1.0/5]
+best_epoch: 4.000000
+accuracy: 0.962873
+precision: 0.866142
+recall: 0.791367
+f1: 0.827068
+roc_auc: 0.972348
+tn: 1083.000000
+fp: 17.000000
+fn: 29.000000
+tp: 110.000000
+
+[Fold 2.0/5]
+best_epoch: 15.000000
+accuracy: 0.950647
+precision: 0.830986
+recall: 0.761290
+f1: 0.794613
+roc_auc: 0.967270
+tn: 1057.000000
+fp: 24.000000
+fn: 37.000000
+tp: 118.000000
+
+[Fold 3.0/5]
+best_epoch: 7.000000
+accuracy: 0.962843
+precision: 0.875000
+recall: 0.788732
+f1: 0.829630
+roc_auc: 0.969473
+tn: 1080.000000
+fp: 16.000000
+fn: 30.000000
+tp: 112.000000
+
+[Fold 4.0/5]
+best_epoch: 18.000000
+accuracy: 0.949757
+precision: 0.865385
+recall: 0.652174
+f1: 0.743802
+roc_auc: 0.951074
+tn: 1082.000000
+fp: 14.000000
+fn: 48.000000
+tp: 90.000000
+
+[Fold 5.0/5]
+best_epoch: 34.000000
+accuracy: 0.950245
+precision: 0.905983
+recall: 0.679487
+f1: 0.776557
+roc_auc: 0.958753
+tn: 1059.000000
+fp: 11.000000
+fn: 50.000000
+tp: 106.000000
+
+================================================================================
+OVERALL OUT-OF-FOLD METRICS
+================================================================================
+accuracy: 0.955289
+precision: 0.867314
+recall: 0.734247
+f1: 0.795252
+roc_auc: 0.946260
+tn: 5361
+fp: 82
+fn: 194
+tp: 536
+
+Classification report:
+              precision    recall  f1-score   support
+
+         ADL     0.9651    0.9849    0.9749      5443
+        Fall     0.8673    0.7342    0.7953       730
+
+    accuracy                         0.9553      6173
+   macro avg     0.9162    0.8596    0.8851      6173
+weighted avg     0.9535    0.9553    0.9537      6173
+
+Confusion matrix [[TN, FP], [FN, TP]]:
+[[5361   82]
+ [ 194  536]]
+
+Fold mean +/- std:
+accuracy: 0.955273 +/- 0.006931
+precision: 0.868699 +/- 0.026784
+recall: 0.734610 +/- 0.064608
+f1: 0.794334 +/- 0.036010
+roc_auc: 0.963784 +/- 0.008728
